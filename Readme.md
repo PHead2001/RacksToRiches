@@ -1917,22 +1917,86 @@ The simulation can run entirely through tests without the React UI.
 
 ## Phase 2: Playable vertical slice
 
-Build:
+Phase 2 delivers the first complete browser-playable loop while preserving the
+pure Phase 1 simulation boundary. The application uses explicit boot, main-menu,
+setup, save-manager, options, credits, and active-game screen states. The active
+game exposes only Facility, Contracts, Hardware Store, and the pause menu.
 
-- Dashboard
-- One bedroom facility
-- One starter rack
-- Rack equipment placement
-- Hardware store
-- Three contract offers
-- Contract acceptance
-- Contract assignment
-- Revenue ticking
-- Saving
+The main menu supports Continue, New Game, Load Game, Options, and Credits.
+Continue selects the most recently played valid save. Browser builds do not show
+a fake Quit action; application capabilities reserve that action for a future
+desktop adapter.
+
+Five reusable local save slots are supported. Each slot reports company, cash,
+reputation tier, playtime, last-played timestamp, schema version, development
+modification status, and health. Save health is empty, valid, recoverable, or
+invalid. Slot operations include create or overwrite, load, save, delete, JSON
+export, validated JSON import, and last-known-good backup restoration. Browser
+save writes use isolated temporary, current, backup, and preserved-corrupt
+records. Import validation occurs before any current data is replaced. Invalid
+or unsupported data is never silently reset or deleted.
+
+Global options are stored separately from game slots. Phase 2 options are fixed
+UI scale, reduced motion, compact or expanded number formatting, autosave,
+fixed autosave intervals, and fullscreen when the platform supports it. Audio
+settings remain outside Phase 2 because audio does not exist yet.
+
+The playable slice begins in the bedroom with the Phase 1 starter rack,
+inventory, cash, and Gravy's Garden Blog offer. The Facility screen provides a
+keyboard- and click-operable 12U grid, inventory installation, installed-item
+move and removal controls, power toggles, live capacity telemetry, and explicit
+power or cooling throttling warnings. All rack changes go through typed pure
+domain commands.
+
+The tutorial offer can be accepted and assigned to the starter rack and remains
+recoverable until acceptance. The Contracts screen shows requirements,
+per-resource fulfillment, duration, revenue multiplier output, actual revenue,
+SLA state, and remaining time. Completion grants the centralized tutorial
+reputation reward, records the tutorial milestone, unlocks the bedroom hardware
+store, and fills three deterministic Bedroom Host marketplace slots. Accepting,
+rejecting, or expiring a starter offer deterministically refills its slot from
+the saved RNG state. Negotiation, renewal, growth, rack groups, and enterprise
+contracts are not Phase 2 systems.
+
+The Hardware Store lists currently unlocked bedroom-compatible Phase 1
+equipment with price, rack size, output, power, heat, reliability, and category.
+Purchases update cash and inventory atomically through a pure typed command.
+Selling and scrapping are not available in this phase.
+
+Runtime coordination belongs outside `src/game/**`. One runtime owner advances
+elapsed browser time, avoids duplicate Strict Mode tick loops, supports autosave
+and development speed multipliers, saves on document hiding and menu return,
+and reports saving, saved, or failed only after repository confirmation. Offline
+earnings remain a Phase 3 concern.
+
+Development and QA builds provide an F10 control deck. It is draggable,
+resizable, minimizable, keyboard reachable, bounded to the viewport, and offers
+typed economy, time, contract, scenario, diagnostic, and one-step undo commands.
+Every accepted command validates the resulting game state, appends to a bounded
+log, creates one undo snapshot, and marks subsequent saves as development
+modified. The normal release build removes the development panel module from
+its output rather than hiding it.
+
+Expected storage, import, migration, and command failures produce actionable
+messages. Unexpected React, runtime-loop, global error, and unhandled-rejection
+failures enter a recovery UI with diagnostic copy, valid-state export, reload,
+and return-to-menu controls. Bootstrap failures render a styled fatal fallback
+instead of a blank page. Error history is in-memory and bounded; no telemetry is
+sent anywhere.
+
+The placeholder interface is desktop-first and cyber-industrial, with semantic
+controls, visible keyboard focus, reduced-motion support, responsive save and
+options screens, and no horizontal clipping at the required desktop viewports.
+Final art is intentionally outside Phase 2.
 
 Completion requirement:
 
-A player can start a new game, build a rack, accept a contract, and earn money.
+A player can create a named company in one of five safe slots, build the starter
+rack without relying on drag and drop, accept and assign the tutorial contract,
+watch simulation-backed income change, unlock the starter store and marketplace,
+save, return to the menu, refresh, and restore the same progress. Release, QA,
+unit, architecture, dead-code, coverage, browser, accessibility, and rendered
+inspection gates must pass before Phase 2 is complete.
 
 ## Phase 3: Early progression
 

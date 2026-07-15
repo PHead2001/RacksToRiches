@@ -1,5 +1,8 @@
 node_modules
 dist
+dist-qa
 coverage
+playwright-report
+test-results
 package-lock.json
 Readme.md

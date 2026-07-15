@@ -3,6 +3,12 @@ import { VIOLATION_RECOVERY_RATE } from "./constants";
 import { calculateContractPerformance } from "./contracts";
 import { calculateEconomyRate } from "./economy";
 import { DomainInvariantError, assertFiniteNonNegative } from "./errors";
+import {
+  TUTORIAL_CONTRACT_ID,
+  TUTORIAL_MILESTONE_ID,
+  TUTORIAL_REPUTATION_REWARD,
+  fillStarterMarketplace,
+} from "./marketplace";
 import type { ContractInstance, GameState } from "./types";
 import { assertGameState } from "./validation";
 
@@ -65,6 +71,7 @@ export function advanceGame(state: GameState, deltaSeconds: number): GameState {
     let completedThisStep = 0;
     let breachedThisStep = 0;
     let reputationEarned = 0;
+    const completedIds: string[] = [];
 
     for (const contract of current.contracts.active) {
       const score = performance.get(contract.id);
@@ -91,7 +98,11 @@ export function advanceGame(state: GameState, deltaSeconds: number): GameState {
         stepSeconds >= contract.customerTolerance - contract.violationSeconds;
       if (completes) {
         completedThisStep += 1;
-        reputationEarned += contract.tier;
+        completedIds.push(contract.id);
+        reputationEarned +=
+          contract.id === TUTORIAL_CONTRACT_ID
+            ? TUTORIAL_REPUTATION_REWARD
+            : contract.tier;
       } else if (breaches) {
         breachedThisStep += 1;
       } else {
@@ -132,6 +143,27 @@ export function advanceGame(state: GameState, deltaSeconds: number): GameState {
         ),
       },
     };
+    if (
+      completedIds.includes(TUTORIAL_CONTRACT_ID) &&
+      !current.progression.completedMilestones.includes(TUTORIAL_MILESTONE_ID)
+    ) {
+      current = {
+        ...current,
+        progression: {
+          ...current.progression,
+          completedMilestones: [
+            ...current.progression.completedMilestones,
+            TUTORIAL_MILESTONE_ID,
+          ],
+        },
+      };
+    }
+    if (
+      completedThisStep > 0 &&
+      current.progression.completedMilestones.includes(TUTORIAL_MILESTONE_ID)
+    ) {
+      current = fillStarterMarketplace(current);
+    }
     secondsLeft = Math.max(0, secondsLeft - stepSeconds);
   }
 

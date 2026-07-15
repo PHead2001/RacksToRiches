@@ -1,12 +1,14 @@
 import { CURRENT_GAME_VERSION } from "./constants";
 import { CUSTOMER_DEFINITIONS } from "./definitions";
 import { assertFiniteNonNegative } from "./errors";
+import { DomainInvariantError } from "./errors";
 import { validateSeed } from "./random";
 import type { GameState } from "./types";
 
 export interface InitialStateOptions {
   seed?: number;
   startedAt?: number;
+  companyName?: string;
 }
 
 export function createInitialState(
@@ -14,15 +16,22 @@ export function createInitialState(
 ): GameState {
   const seed = options.seed ?? 0x5eed1234;
   const startedAt = options.startedAt ?? 0;
+  const companyName = options.companyName?.trim() ?? "Racks to Riches Hosting";
   validateSeed(seed);
   assertFiniteNonNegative(startedAt, "startedAt");
+  if (companyName.length === 0 || companyName.length > 60) {
+    throw new DomainInvariantError(
+      "INVALID_STATE",
+      "Company name must contain between 1 and 60 characters",
+    );
+  }
 
   return {
     version: CURRENT_GAME_VERSION,
     clockSeconds: 0,
     rngSeed: seed,
     company: {
-      name: "Racks to Riches Hosting",
+      name: companyName,
       cash: 500,
       reputation: 0,
       researchPoints: 0,

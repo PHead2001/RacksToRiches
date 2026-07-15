@@ -97,7 +97,11 @@ describe("advanceGame", () => {
     expect(result.company.lifetimeRevenue).toBeCloseTo(360);
     expect(result.company.lifetimeExpenses).toBeCloseTo(2.27);
     expect(result.company.cash).toBeCloseTo(857.73);
-    expect(result.company.reputation).toBe(1);
+    expect(result.company.reputation).toBe(10);
+    expect(result.progression.completedMilestones).toContain(
+      "tutorial-completed",
+    );
+    expect(result.contracts.offers).toHaveLength(3);
   });
 
   it("breaches a non-performing contract at its tolerance boundary", () => {
