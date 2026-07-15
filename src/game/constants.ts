@@ -1,0 +1,3 @@
+export const CURRENT_GAME_VERSION = 1;
+export const ELECTRICITY_COST_PER_WATT_SECOND = 0.000_01;
+export const VIOLATION_RECOVERY_RATE = 0.5;
