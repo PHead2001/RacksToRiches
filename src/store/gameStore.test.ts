@@ -78,7 +78,7 @@ describe("game store", () => {
     const options: AppOptions = {
       ...DEFAULT_OPTIONS,
       reducedMotion: true,
-      autosaveIntervalSeconds: 30,
+      autosaveIntervalSeconds: 300,
     };
     expect(await store.getState().updateOptions(options)).toBe(true);
     expect(store.getState().options).toEqual(options);
@@ -110,5 +110,67 @@ describe("game store", () => {
         .applyDevelopmentCommand({ type: "set-cash", amount: Number.NaN }),
     ).toBe(false);
     expect(store.getState().errors).toHaveLength(1);
+  });
+
+  it("deduplicates notifications and only announces tutorial completion on transition", async () => {
+    const { store } = setup();
+    await store.getState().boot();
+    store.getState().notify({
+      key: "save-success",
+      type: "success",
+      message: "First save",
+      durationMilliseconds: 5_000,
+    });
+    store.getState().notify({
+      key: "save-success",
+      type: "success",
+      message: "Latest save",
+      durationMilliseconds: 5_000,
+    });
+    expect(store.getState().notifications).toHaveLength(1);
+    expect(store.getState().notifications[0]?.message).toBe("Latest save");
+    const notificationId = store.getState().notifications[0]?.id;
+    if (notificationId === undefined) throw new Error("fixture");
+    store.getState().dismissNotification(notificationId);
+    expect(store.getState().notifications).toEqual([]);
+
+    await store.getState().createGame("slot-1", "Transition Test");
+    store.setState({ notifications: [] });
+    const current = store.getState().gameState;
+    if (current === null) throw new Error("fixture");
+    store.getState().setRuntimeState({
+      ...current,
+      progression: {
+        ...current.progression,
+        completedMilestones: ["tutorial-completed"],
+      },
+    });
+    expect(store.getState().notifications).toMatchObject([
+      { key: "tutorial-complete", durationMilliseconds: 5_000 },
+    ]);
+    store.setState({ notifications: [] });
+    const completed = store.getState().gameState;
+    if (completed === null) throw new Error("fixture");
+    store.getState().setRuntimeState(completed);
+    expect(store.getState().notifications).toEqual([]);
+  });
+
+  it("persists and reloads a bankrupt company into its terminal state", async () => {
+    const { store } = setup();
+    await store.getState().boot();
+    await store.getState().createGame("slot-1", "Terminal Test");
+    expect(
+      store
+        .getState()
+        .applyDevelopmentCommand({ type: "set-cash", amount: -10_000 }),
+    ).toBe(true);
+    expect(await store.getState().saveNow()).toBe(true);
+    expect(await store.getState().returnToMenu(true)).toBe(true);
+    expect(await store.getState().continueGame()).toBe(true);
+    expect(store.getState().gameState?.progression.terminalState).toMatchObject(
+      {
+        kind: "bankrupt",
+      },
+    );
   });
 });

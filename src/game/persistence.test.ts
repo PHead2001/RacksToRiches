@@ -15,7 +15,29 @@ describe("versioned persistence", () => {
   it("round-trips a valid save", () => {
     const state = createInitialState({ seed: 123, startedAt: 456 });
     expect(loadGame(serializeGame(state))).toEqual({ ok: true, state });
-    expect(SAVE_MIGRATIONS.size).toBe(0);
+    expect(SAVE_MIGRATIONS.size).toBe(1);
+  });
+
+  it("migrates version-one saves without changing their recorded cash", () => {
+    const current = createInitialState({ companyName: "Legacy", seed: 44 });
+    current.company.cash = 321.5;
+    const legacy = {
+      ...current,
+      version: 1,
+      progression: {
+        completedMilestones: current.progression.completedMilestones,
+        prestigeCurrency: current.progression.prestigeCurrency,
+      },
+    };
+    const loaded = loadGame(JSON.stringify({ version: 1, state: legacy }));
+    expect(loaded).toMatchObject({
+      ok: true,
+      state: {
+        version: 2,
+        company: { cash: 321.5 },
+        progression: { terminalState: null },
+      },
+    });
   });
 
   it("returns typed errors for malformed JSON, bad envelopes, and unsupported versions", () => {

@@ -5,17 +5,37 @@ import {
   useMemo,
   useState,
   type ChangeEvent,
+  type ReactNode,
 } from "react";
+import {
+  DndContext,
+  DragOverlay,
+  KeyboardSensor,
+  PointerSensor,
+  TouchSensor,
+  pointerWithin,
+  useDraggable,
+  useDroppable,
+  useSensor,
+  useSensors,
+  type DragEndEvent,
+  type DragOverEvent,
+  type DragStartEvent,
+} from "@dnd-kit/core";
 
 import {
+  calculateContractReadiness,
+  calculateSlaBuffer,
   getEquipmentDefinition,
   getUnlockedBedroomEquipment,
   TUTORIAL_MILESTONE_ID,
+  VIOLATION_RECOVERY_RATE,
 } from "../game";
 import type { ContractInstance, GameState } from "../game";
 import { SAVE_SLOT_IDS, webCapabilities } from "../platform";
 import type { AppOptions, SaveSlotId, SaveSlotSummary } from "../platform";
 import type { GameRuntime } from "../runtime";
+import type { AppNotification } from "../store";
 import {
   contractActualRevenue,
   contractCustomerName,
@@ -35,10 +55,12 @@ const DevelopmentPanel = __DEV_TOOLS__
 export function App({ runtime }: { runtime: GameRuntime }) {
   const screen = useAppStore((state) => state.screen);
   const options = useAppStore((state) => state.options);
+  const previewUiScale = useAppStore((state) => state.previewUiScale);
   const gameState = useAppStore((state) => state.gameState);
   const boot = useAppStore((state) => state.boot);
   const saveNow = useAppStore((state) => state.saveNow);
   const togglePauseMenu = useAppStore((state) => state.togglePauseMenu);
+  const dragActive = useAppStore((state) => state.dragActive);
   const recordError = useAppStore((state) => state.recordError);
   const [developmentOpen, setDevelopmentOpen] = useState(false);
 
@@ -55,7 +77,13 @@ export function App({ runtime }: { runtime: GameRuntime }) {
 
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key === "Escape" && screen === "game") togglePauseMenu();
+      if (
+        event.key === "Escape" &&
+        screen === "game" &&
+        !dragActive &&
+        gameState?.progression.terminalState === null
+      )
+        togglePauseMenu();
       if (__DEV_TOOLS__ && event.key === "F10") {
         event.preventDefault();
         setDevelopmentOpen((open) => !open);
@@ -65,7 +93,7 @@ export function App({ runtime }: { runtime: GameRuntime }) {
     return () => {
       window.removeEventListener("keydown", onKeyDown);
     };
-  }, [screen, togglePauseMenu]);
+  }, [dragActive, gameState, screen, togglePauseMenu]);
 
   useEffect(() => {
     const onError = (event: ErrorEvent) => {
@@ -104,7 +132,7 @@ export function App({ runtime }: { runtime: GameRuntime }) {
     <div
       className="app-root"
       data-reduced-motion={String(options.reducedMotion)}
-      data-ui-scale={options.uiScale}
+      data-ui-scale={previewUiScale ?? options.uiScale}
     >
       {screen === "boot" && <BootScreen />}
       {screen === "menu" && <MainMenu />}
@@ -126,6 +154,7 @@ export function App({ runtime }: { runtime: GameRuntime }) {
           />
         </Suspense>
       )}
+      <NotificationStack />
     </div>
   );
 }
@@ -165,7 +194,6 @@ function MainMenu() {
   const slots = useAppStore((state) => state.slots);
   const navigate = useAppStore((state) => state.navigate);
   const continueGame = useAppStore((state) => state.continueGame);
-  const message = useAppStore((state) => state.message);
   const validSave = slots.some(({ health }) => health === "valid");
 
   return (
@@ -240,7 +268,6 @@ function MainMenu() {
               Credits
             </button>
           </div>
-          {message !== null && <InlineMessage message={message} />}
           {!webCapabilities.canQuit && (
             <p className="menu-footnote">
               Close the browser tab when you are finished.
@@ -286,7 +313,6 @@ function ScreenHeader({
 function NewGameScreen() {
   const slots = useAppStore((state) => state.slots);
   const createGame = useAppStore((state) => state.createGame);
-  const message = useAppStore((state) => state.message);
   const [slotId, setSlotId] = useState<SaveSlotId>("slot-1");
   const [name, setName] = useState("Foxglove Hosting");
   const selected = slots.find((slot) => slot.slotId === slotId);
@@ -351,7 +377,6 @@ function NewGameScreen() {
             })}
           </div>
         </fieldset>
-        {message !== null && <InlineMessage message={message} />}
         <button className="primary" onClick={() => void submit()}>
           Initialize company
         </button>
@@ -367,7 +392,6 @@ function SaveManager() {
   const exportSlot = useAppStore((state) => state.exportSlot);
   const importSlot = useAppStore((state) => state.importSlot);
   const restoreBackup = useAppStore((state) => state.restoreBackup);
-  const message = useAppStore((state) => state.message);
 
   const importFile = async (
     slot: SaveSlotSummary,
@@ -393,7 +417,6 @@ function SaveManager() {
         title="Save manager"
         subtitle="Current, temporary, and last-known-good records stay isolated per bay."
       />
-      {message !== null && <InlineMessage message={message} />}
       <section className="save-grid" aria-label="Five save slots">
         {slots.map((slot) => (
           <article
@@ -501,9 +524,16 @@ function SaveManager() {
 function OptionsScreen() {
   const stored = useAppStore((state) => state.options);
   const updateOptions = useAppStore((state) => state.updateOptions);
-  const message = useAppStore((state) => state.message);
+  const setUiScalePreview = useAppStore((state) => state.setUiScalePreview);
   const gameState = useAppStore((state) => state.gameState);
   const [draft, setDraft] = useState(stored);
+
+  useEffect(
+    () => () => {
+      setUiScalePreview(null);
+    },
+    [setUiScalePreview],
+  );
 
   const update = <K extends keyof AppOptions>(key: K, value: AppOptions[K]) => {
     setDraft((options) => ({ ...options, [key]: value }));
@@ -511,11 +541,18 @@ function OptionsScreen() {
   const updateUiScale = (value: string) => {
     if (value === "compact" || value === "standard" || value === "large") {
       update("uiScale", value);
+      setUiScalePreview(value);
     }
   };
   const updateAutosaveInterval = (value: string) => {
     const seconds = Number(value);
-    if (seconds === 10 || seconds === 30 || seconds === 60) {
+    if (
+      seconds === 60 ||
+      seconds === 300 ||
+      seconds === 600 ||
+      seconds === 900 ||
+      seconds === 1800
+    ) {
       update("autosaveIntervalSeconds", seconds);
     }
   };
@@ -572,9 +609,11 @@ function OptionsScreen() {
               updateAutosaveInterval(event.target.value);
             }}
           >
-            <option value={10}>10 seconds</option>
-            <option value={30}>30 seconds</option>
-            <option value={60}>60 seconds</option>
+            <option value={60}>1 minute</option>
+            <option value={300}>5 minutes</option>
+            <option value={600}>10 minutes</option>
+            <option value={900}>15 minutes</option>
+            <option value={1800}>30 minutes</option>
           </select>
         </label>
         {document.fullscreenEnabled && (
@@ -586,7 +625,6 @@ function OptionsScreen() {
             }}
           />
         )}
-        {message !== null && <InlineMessage message={message} />}
         <button className="primary" onClick={() => void updateOptions(draft)}>
           Save options
         </button>
@@ -646,19 +684,17 @@ function GameShell({ state }: { state: GameState }) {
   const setView = useAppStore((store) => store.setGameView);
   const options = useAppStore((store) => store.options);
   const saveStatus = useAppStore((store) => store.saveStatus);
-  const message = useAppStore((store) => store.message);
   const pauseOpen = useAppStore((store) => store.pauseMenuOpen);
   const togglePause = useAppStore((store) => store.togglePauseMenu);
   const metrics = useMemo(() => selectGameMetrics(state), [state]);
-  const tutorialComplete = state.progression.completedMilestones.includes(
-    TUTORIAL_MILESTONE_ID,
-  );
   const warning =
-    metrics.capacity.powerEfficiency < 1
-      ? "Power throttling active"
-      : metrics.capacity.thermalEfficiency < 1
-        ? "Cooling throttling active"
-        : null;
+    state.company.cash < 0
+      ? "Company operating in debt"
+      : metrics.capacity.powerEfficiency < 1
+        ? "Power throttling active"
+        : metrics.capacity.thermalEfficiency < 1
+          ? "Cooling throttling active"
+          : null;
 
   return (
     <main className="game-shell">
@@ -743,15 +779,22 @@ function GameShell({ state }: { state: GameState }) {
         </nav>
         <section className="game-content">
           <h1 className="game-company">{state.company.name}</h1>
-          {message !== null && <InlineMessage message={message} />}
-          {tutorialComplete && (
-            <div className="success-banner">
-              Tutorial complete · Store and starter marketplace unlocked
-            </div>
+          {state.company.cash < 0 &&
+            state.progression.terminalState === null && (
+              <div className="debt-warning" role="status">
+                Debt warning · Bankruptcy occurs at −$10,000. This company is
+                still playable.
+              </div>
+            )}
+          {state.progression.terminalState === null ? (
+            <>
+              {view === "facility" && <FacilityView state={state} />}
+              {view === "contracts" && <ContractsView state={state} />}
+              {view === "store" && <StoreView state={state} />}
+            </>
+          ) : (
+            <GameOver state={state} />
           )}
-          {view === "facility" && <FacilityView state={state} />}
-          {view === "contracts" && <ContractsView state={state} />}
-          {view === "store" && <StoreView state={state} />}
         </section>
       </div>
       {pauseOpen && <PauseMenu />}
@@ -785,7 +828,32 @@ function FacilityView({ state }: { state: GameState }) {
   const move = useAppStore((store) => store.moveInstalledEquipment);
   const remove = useAppStore((store) => store.removeInstalledEquipment);
   const toggle = useAppStore((store) => store.toggleEquipment);
+  const previewRelocation = useAppStore(
+    (store) => store.previewEquipmentRelocation,
+  );
+  const notify = useAppStore((store) => store.notify);
+  const setDragActive = useAppStore((store) => store.setDragActive);
   const [selectedUnit, setSelectedUnit] = useState(0);
+  const [draggedEquipmentId, setDraggedEquipmentId] = useState<string | null>(
+    null,
+  );
+  const [previewUnits, setPreviewUnits] = useState<readonly number[]>([]);
+  const [dragFeedback, setDragFeedback] = useState<string | null>(null);
+  const sensors = useSensors(
+    useSensor(PointerSensor, { activationConstraint: { distance: 6 } }),
+    useSensor(TouchSensor, {
+      activationConstraint: { delay: 150, tolerance: 8 },
+    }),
+    useSensor(KeyboardSensor),
+  );
+  const { setNodeRef: setInventoryDropRef, isOver: inventoryIsOver } =
+    useDroppable({ id: "inventory-drop" });
+  useEffect(
+    () => () => {
+      setDragActive(false);
+    },
+    [setDragActive],
+  );
   const metrics = useMemo(() => selectGameMetrics(state), [state]);
   const rack = state.facilities[0]?.racks[0];
   if (rack === undefined) throw new Error("Starter rack is missing");
@@ -799,184 +867,412 @@ function FacilityView({ state }: { state: GameState }) {
       );
     });
 
+  const equipmentIdFromDrag = (id: string | number): string | null => {
+    const value = String(id);
+    return value.startsWith("equipment:") ? value.slice(10) : null;
+  };
+  const anchorFromDrop = (id: string | number): number | null => {
+    const value = String(id);
+    if (!value.startsWith("rack-unit:")) return null;
+    const unit = Number(value.slice(10));
+    return Number.isInteger(unit) ? unit : null;
+  };
+  const clearDrag = () => {
+    setDragActive(false);
+    setDraggedEquipmentId(null);
+    setPreviewUnits([]);
+    setDragFeedback(null);
+  };
+  const cancelDrag = () => {
+    setDraggedEquipmentId(null);
+    setPreviewUnits([]);
+    setDragFeedback(null);
+    // dnd-kit's Escape cancellation fires before the app-level key handler.
+    // Keep this flag set through the current keyboard event so Escape cancels
+    // the drag without also opening the pause menu.
+    window.setTimeout(() => {
+      setDragActive(false);
+    }, 0);
+  };
+  const onDragStart = (event: DragStartEvent) => {
+    setDragActive(true);
+    setDraggedEquipmentId(equipmentIdFromDrag(event.active.id));
+  };
+  const onDragOver = (event: DragOverEvent) => {
+    const equipmentId = equipmentIdFromDrag(event.active.id);
+    const anchor = event.over === null ? null : anchorFromDrop(event.over.id);
+    if (equipmentId === null || anchor === null) {
+      setPreviewUnits([]);
+      setDragFeedback(
+        event.over?.id === "inventory-drop"
+          ? "Drop here to return installed equipment to inventory."
+          : null,
+      );
+      return;
+    }
+    const preview = previewRelocation(equipmentId, anchor);
+    if (preview === null) return;
+    if (!preview.ok || preview.placement === null) {
+      setPreviewUnits([]);
+      setDragFeedback(
+        preview.ok ? "No rack placement available." : preview.error.message,
+      );
+      return;
+    }
+    const definition = getEquipmentDefinition(preview.placement.definitionId);
+    const previewStart = preview.placement.startUnit;
+    setPreviewUnits(
+      Array.from(
+        { length: definition.rackUnits },
+        (_, offset) => previewStart + offset,
+      ),
+    );
+    setDragFeedback(
+      preview.reflowed
+        ? `Valid ${String(definition.rackUnits)}U placement; nearby equipment will reflow.`
+        : `Valid ${String(definition.rackUnits)}U placement.`,
+    );
+  };
+  const onDragEnd = (event: DragEndEvent) => {
+    const equipmentId = equipmentIdFromDrag(event.active.id);
+    const overId = event.over?.id;
+    if (equipmentId === null) {
+      clearDrag();
+      return;
+    }
+    const pointerOrigin = (() => {
+      if (event.activatorEvent instanceof MouseEvent) {
+        return {
+          x: event.activatorEvent.clientX,
+          y: event.activatorEvent.clientY,
+        };
+      }
+      if (event.activatorEvent instanceof TouchEvent) {
+        const touch =
+          event.activatorEvent.touches[0] ??
+          event.activatorEvent.changedTouches[0];
+        return touch === undefined
+          ? null
+          : { x: touch.clientX, y: touch.clientY };
+      }
+      return null;
+    })();
+    const pointerTargets =
+      pointerOrigin === null
+        ? []
+        : document.elementsFromPoint(
+            pointerOrigin.x + event.delta.x,
+            pointerOrigin.y + event.delta.y,
+          );
+    const droppedOnInventory =
+      overId === "inventory-drop" ||
+      pointerTargets.some(
+        (element) => element.closest(".inventory-drop-zone") !== null,
+      );
+    const anchor = overId === undefined ? null : anchorFromDrop(overId);
+    if (anchor !== null) move(equipmentId, anchor);
+    else if (droppedOnInventory) {
+      const installed = rack.equipment.some(({ id }) => id === equipmentId);
+      if (installed) remove(equipmentId);
+    } else {
+      notify({
+        key: "drag-invalid",
+        type: "warning",
+        message: "Drop equipment on a rack unit or the inventory panel.",
+      });
+    }
+    clearDrag();
+  };
+  const draggedDefinition =
+    draggedEquipmentId === null
+      ? null
+      : getEquipmentDefinition(
+          [...state.inventory, ...rack.equipment].find(
+            ({ id }) => id === draggedEquipmentId,
+          )?.definitionId ?? "refurbished-desktop",
+        );
+
   return (
-    <div className="facility-layout">
-      <section className="panel room-panel">
-        <div className="section-heading">
-          <div>
-            <p className="eyebrow">FACILITY 01</p>
-            <h2>Bedroom</h2>
-          </div>
-          <span className="status-chip">RESIDENTIAL</span>
-        </div>
-        <div className="bedroom-illustration" aria-hidden="true">
-          <div className="window-glow" />
-          <div className="desk" />
-          <div className="cable cable-one" />
-          <div className="cable cable-two" />
-          <span>100 Mbps consumer uplink</span>
-        </div>
-        <p className="muted">
-          One rack slot, questionable cable management, zero rent. Every empire
-          starts somewhere.
-        </p>
-      </section>
-      <section className="panel rack-panel">
-        <div className="section-heading">
-          <div>
-            <p className="eyebrow">RACK A-01</p>
-            <h2>Starter 12U</h2>
-          </div>
-          <span>{String(metrics.capacity.usedRackUnits)} / 12U</span>
-        </div>
-        <p className="rack-help">
-          Select a rack unit, then install or move equipment. Controls remain
-          fully keyboard accessible.
-        </p>
-        <div className="rack-grid" aria-label="Starter 12U rack">
-          {Array.from({ length: 12 }, (_, index) => 11 - index).map((unit) => {
-            const equipment = occupying(unit);
-            const firstUnit = equipment?.startUnit === unit;
-            return (
-              <button
-                key={unit}
-                className={`rack-unit ${selectedUnit === unit ? "selected" : ""} ${equipment === undefined ? "empty" : "occupied"}`}
-                onClick={() => {
-                  setSelectedUnit(unit);
-                }}
-                aria-label={`Rack unit ${String(unit + 1)}${equipment === undefined ? ", empty" : `, ${equipmentLabel(equipment.definitionId)}`}`}
-              >
-                <span className="unit-number">{String(unit + 1)}U</span>
-                {equipment === undefined ? (
-                  <em>AVAILABLE</em>
-                ) : firstUnit ? (
-                  <strong>{equipmentLabel(equipment.definitionId)}</strong>
-                ) : (
-                  <span className="continuation">┄</span>
-                )}
-                {equipment !== undefined && (
-                  <i className={equipment.poweredOn ? "led on" : "led"} />
-                )}
-              </button>
-            );
-          })}
-        </div>
-      </section>
-      <aside className="facility-side">
-        <section className="panel inventory-panel">
+    <DndContext
+      sensors={sensors}
+      collisionDetection={pointerWithin}
+      onDragStart={onDragStart}
+      onDragOver={onDragOver}
+      onDragEnd={onDragEnd}
+      onDragCancel={cancelDrag}
+    >
+      <div className="facility-layout">
+        <section className="panel room-panel">
           <div className="section-heading">
             <div>
-              <p className="eyebrow">UNRACKED</p>
-              <h2>Inventory</h2>
+              <p className="eyebrow">FACILITY 01</p>
+              <h2>Bedroom</h2>
             </div>
-            <span>{String(state.inventory.length)} items</span>
+            <span className="status-chip">RESIDENTIAL</span>
           </div>
-          {state.inventory.length === 0 && (
-            <p className="empty-state">
-              Nothing waiting on the floor. Miraculous.
-            </p>
-          )}
-          <div className="inventory-list">
-            {state.inventory.map((item) => {
-              const definition = getEquipmentDefinition(item.definitionId);
-              return (
-                <article key={item.id}>
-                  <div>
-                    <strong>{definition.name}</strong>
-                    <small>
-                      {definition.category} · {String(definition.rackUnits)}U
-                    </small>
-                  </div>
-                  <button onClick={() => install(item.id, selectedUnit)}>
-                    Install at {String(selectedUnit + 1)}U
-                  </button>
-                </article>
-              );
-            })}
+          <div className="bedroom-illustration" aria-hidden="true">
+            <div className="window-glow" />
+            <div className="desk" />
+            <div className="cable cable-one" />
+            <div className="cable cable-two" />
+            <span>100 Mbps consumer uplink</span>
           </div>
+          <p className="muted">
+            One rack slot, questionable cable management, zero rent. Every
+            empire starts somewhere.
+          </p>
         </section>
-        <section className="panel capacity-panel">
+        <section className="panel rack-panel">
           <div className="section-heading">
             <div>
-              <p className="eyebrow">LIVE TELEMETRY</p>
-              <h2>Rack output</h2>
+              <p className="eyebrow">RACK A-01</p>
+              <h2>Starter 12U</h2>
             </div>
+            <span>{String(metrics.capacity.usedRackUnits)} / 12U</span>
           </div>
-          <dl className="telemetry-grid">
-            <Metric
-              label="Compute"
-              value={metrics.capacity.compute.toFixed(1)}
-            />
-            <Metric
-              label="Storage"
-              value={metrics.capacity.storage.toFixed(1)}
-            />
-            <Metric
-              label="Bandwidth"
-              value={`${metrics.capacity.bandwidth.toFixed(0)} Mbps`}
-            />
-            <Metric
-              label="Reliability"
-              value={`${(metrics.capacity.reliability * 100).toFixed(1)}%`}
-            />
-            <Metric
-              label="Power draw"
-              value={`${metrics.capacity.powerDraw.toFixed(0)} W`}
-              warning={metrics.capacity.powerEfficiency < 1}
-            />
-            <Metric
-              label="Available power"
-              value={`${metrics.capacity.availablePower.toFixed(0)} W`}
-            />
-            <Metric
-              label="Heat"
-              value={metrics.capacity.heatOutput.toFixed(0)}
-            />
-            <Metric
-              label="Cooling"
-              value={metrics.capacity.availableCooling.toFixed(0)}
-              warning={metrics.capacity.thermalEfficiency < 1}
-            />
-          </dl>
-          {metrics.capacity.powerEfficiency < 1 && (
-            <p className="warning-box">
-              Power shortage: effective output is multiplied by{" "}
-              {(metrics.capacity.powerEfficiency * 100).toFixed(0)}%.
-            </p>
-          )}
-          {metrics.capacity.thermalEfficiency < 1 && (
-            <p className="warning-box">
-              Cooling shortage: thermal throttling reduces effective capacity.
-            </p>
-          )}
+          <p className="rack-help">
+            Select a rack unit, then install or move equipment. Controls remain
+            fully keyboard accessible.
+          </p>
+          <div
+            className={`rack-grid ${draggedEquipmentId !== null && previewUnits.length === 0 && dragFeedback !== null ? "invalid-preview" : ""}`}
+            aria-label="Starter 12U rack"
+          >
+            {Array.from({ length: 12 }, (_, index) => 11 - index).map(
+              (unit) => {
+                const equipment = occupying(unit);
+                const firstUnit = equipment?.startUnit === unit;
+                return (
+                  <RackUnitButton
+                    key={unit}
+                    unit={unit}
+                    className={`rack-unit ${selectedUnit === unit ? "selected" : ""} ${previewUnits.includes(unit) ? "drop-preview" : ""} ${equipment === undefined ? "empty" : "occupied"}`}
+                    onClick={() => {
+                      setSelectedUnit(unit);
+                    }}
+                    aria-label={`Rack unit ${String(unit + 1)}${equipment === undefined ? ", empty" : `, ${equipmentLabel(equipment.definitionId)}`}`}
+                  >
+                    <span className="unit-number">{String(unit + 1)}U</span>
+                    {equipment === undefined ? (
+                      <em>AVAILABLE</em>
+                    ) : firstUnit ? (
+                      <strong>{equipmentLabel(equipment.definitionId)}</strong>
+                    ) : (
+                      <span className="continuation">┄</span>
+                    )}
+                    {equipment !== undefined && (
+                      <i className={equipment.poweredOn ? "led on" : "led"} />
+                    )}
+                  </RackUnitButton>
+                );
+              },
+            )}
+          </div>
         </section>
-        <section className="panel installed-panel">
-          <div className="section-heading">
-            <h2>Installed controls</h2>
-          </div>
-          {rack.equipment.map((equipment) => (
-            <article key={equipment.id}>
-              <strong>{equipmentLabel(equipment.definitionId)}</strong>
-              <small>
-                {String(equipment.startUnit + 1)}U ·{" "}
-                {equipment.poweredOn ? "Powered" : "Offline"}
-              </small>
-              <div className="button-row compact-row">
-                <button
-                  onClick={() => toggle(equipment.id, !equipment.poweredOn)}
-                >
-                  {equipment.poweredOn ? "Power off" : "Power on"}
-                </button>
-                <button onClick={() => move(equipment.id, selectedUnit)}>
-                  Move
-                </button>
-                <button onClick={() => remove(equipment.id)}>Remove</button>
+        <aside className="facility-side">
+          <section
+            className={`panel inventory-panel ${inventoryIsOver ? "drop-active" : ""}`}
+          >
+            <div className="section-heading">
+              <div>
+                <p className="eyebrow">UNRACKED</p>
+                <h2>Inventory</h2>
               </div>
-            </article>
-          ))}
-        </section>
-      </aside>
-    </div>
+              <span>{String(state.inventory.length)} items</span>
+            </div>
+            {state.inventory.length === 0 && (
+              <p className="empty-state">
+                Nothing waiting on the floor. Miraculous.
+              </p>
+            )}
+            <div className="inventory-list">
+              {state.inventory.map((item) => {
+                const definition = getEquipmentDefinition(item.definitionId);
+                return (
+                  <article key={item.id}>
+                    <div>
+                      <strong>{definition.name}</strong>
+                      <small>
+                        {definition.category} · {String(definition.rackUnits)}U
+                      </small>
+                    </div>
+                    <EquipmentDragHandle
+                      equipmentId={item.id}
+                      label={`Drag ${definition.name}`}
+                    />
+                    <button onClick={() => install(item.id, selectedUnit)}>
+                      Install at {String(selectedUnit + 1)}U
+                    </button>
+                  </article>
+                );
+              })}
+            </div>
+          </section>
+          <section className="panel capacity-panel">
+            <div className="section-heading">
+              <div>
+                <p className="eyebrow">LIVE TELEMETRY</p>
+                <h2>Rack output</h2>
+              </div>
+            </div>
+            <dl className="telemetry-grid">
+              <Metric
+                label="Compute"
+                value={metrics.capacity.compute.toFixed(1)}
+              />
+              <Metric
+                label="Storage"
+                value={metrics.capacity.storage.toFixed(1)}
+              />
+              <Metric
+                label="Bandwidth"
+                value={`${metrics.capacity.bandwidth.toFixed(0)} Mbps`}
+              />
+              <Metric
+                label="Reliability"
+                value={`${(metrics.capacity.reliability * 100).toFixed(1)}%`}
+              />
+              <Metric
+                label="Power draw"
+                value={`${metrics.capacity.powerDraw.toFixed(0)} W`}
+                warning={metrics.capacity.powerEfficiency < 1}
+              />
+              <Metric
+                label="Available power"
+                value={`${metrics.capacity.availablePower.toFixed(0)} W`}
+              />
+              <Metric
+                label="Heat"
+                value={metrics.capacity.heatOutput.toFixed(0)}
+              />
+              <Metric
+                label="Cooling"
+                value={metrics.capacity.availableCooling.toFixed(0)}
+                warning={metrics.capacity.thermalEfficiency < 1}
+              />
+            </dl>
+            {metrics.capacity.powerEfficiency < 1 && (
+              <p className="warning-box">
+                Power shortage: effective output is multiplied by{" "}
+                {(metrics.capacity.powerEfficiency * 100).toFixed(0)}%.
+              </p>
+            )}
+            {metrics.capacity.thermalEfficiency < 1 && (
+              <p className="warning-box">
+                Cooling shortage: thermal throttling reduces effective capacity.
+              </p>
+            )}
+          </section>
+          <section className="panel installed-panel">
+            <div className="section-heading">
+              <h2>Installed controls</h2>
+            </div>
+            <div
+              ref={setInventoryDropRef}
+              className={`inventory-drop-zone ${inventoryIsOver || draggedEquipmentId !== null ? "drop-ready" : ""}`}
+              aria-label="Equipment inventory drop zone"
+              onPointerUp={() => {
+                if (
+                  draggedEquipmentId !== null &&
+                  rack.equipment.some(({ id }) => id === draggedEquipmentId)
+                ) {
+                  remove(draggedEquipmentId);
+                }
+              }}
+            >
+              Drop installed equipment here to return it to inventory.
+            </div>
+            {rack.equipment.map((equipment) => (
+              <article key={equipment.id}>
+                <strong>{equipmentLabel(equipment.definitionId)}</strong>
+                <small>
+                  {String(equipment.startUnit + 1)}U ·{" "}
+                  {equipment.poweredOn ? "Powered" : "Offline"}
+                </small>
+                <div className="button-row compact-row">
+                  <EquipmentDragHandle
+                    equipmentId={equipment.id}
+                    label={`Drag ${equipmentLabel(equipment.definitionId)}`}
+                  />
+                  <button
+                    onClick={() => toggle(equipment.id, !equipment.poweredOn)}
+                  >
+                    {equipment.poweredOn ? "Power off" : "Power on"}
+                  </button>
+                  <button onClick={() => move(equipment.id, selectedUnit)}>
+                    Move
+                  </button>
+                  <button onClick={() => remove(equipment.id)}>Remove</button>
+                </div>
+              </article>
+            ))}
+          </section>
+          <p className="drag-feedback" aria-live="polite">
+            {dragFeedback}
+          </p>
+        </aside>
+      </div>
+      <DragOverlay>
+        {draggedDefinition === null ? null : (
+          <div className="drag-overlay">
+            <strong>{draggedDefinition.name}</strong>
+            <span>{String(draggedDefinition.rackUnits)}U preview</span>
+          </div>
+        )}
+      </DragOverlay>
+    </DndContext>
+  );
+}
+
+function RackUnitButton({
+  unit,
+  className,
+  children,
+  onClick,
+  "aria-label": ariaLabel,
+}: {
+  unit: number;
+  className: string;
+  children: ReactNode;
+  onClick: () => void;
+  "aria-label": string;
+}) {
+  const { setNodeRef, isOver } = useDroppable({
+    id: `rack-unit:${String(unit)}`,
+  });
+  return (
+    <button
+      ref={setNodeRef}
+      className={`${className} ${isOver ? "drop-anchor" : ""}`}
+      onClick={onClick}
+      aria-label={ariaLabel}
+    >
+      {children}
+    </button>
+  );
+}
+
+function EquipmentDragHandle({
+  equipmentId,
+  label,
+}: {
+  equipmentId: string;
+  label: string;
+}) {
+  const { setNodeRef, listeners, attributes } = useDraggable({
+    id: `equipment:${equipmentId}`,
+  });
+  return (
+    <button
+      ref={setNodeRef}
+      className="drag-handle"
+      type="button"
+      aria-label={label}
+      {...listeners}
+      {...attributes}
+    >
+      Drag
+    </button>
   );
 }
 
@@ -1054,7 +1350,9 @@ function ContractsView({ state }: { state: GameState }) {
           ))}
           {state.contracts.active.length === 0 && (
             <div className="panel empty-state">
-              Install the starter hardware, then accept Gravy's contract.
+              {tutorialComplete
+                ? "No active contracts. Accept a marketplace offer to put the rack to work."
+                : "Install the starter hardware, then accept Gravy's contract."}
             </div>
           )}
         </div>
@@ -1077,7 +1375,11 @@ function ContractCard({
   onReject?: (() => void) | undefined;
 }) {
   const resources = selectResourceFulfillment(capacity, contract);
-  const compatibility = resources.every(({ ratio }) => ratio >= 1);
+  const readiness = calculateContractReadiness(contract, capacity);
+  const sla = calculateSlaBuffer({
+    ...contract,
+    performanceScore: performance ?? readiness.fulfillment,
+  });
   return (
     <article className="panel contract-card">
       <header>
@@ -1085,8 +1387,10 @@ function ContractCard({
           <p className="eyebrow">TIER {String(contract.tier)}</p>
           <h3>{contractCustomerName(contract)}</h3>
         </div>
-        <span className={`status-chip ${compatibility ? "good" : "warn"}`}>
-          {compatibility ? "COMPATIBLE" : "UPGRADE NEEDED"}
+        <span
+          className={`status-chip ${readiness.kind === "ready" || readiness.kind === "active" ? "good" : "warn"}`}
+        >
+          {readiness.label}
         </span>
       </header>
       <p className="service-name">
@@ -1111,8 +1415,11 @@ function ContractCard({
           <dd>{formatDuration(contract.remainingSeconds)}</dd>
         </div>
         <div>
-          <dt>SLA tolerance</dt>
-          <dd>{formatDuration(contract.customerTolerance)}</dd>
+          <dt>SLA buffer</dt>
+          <dd>
+            {formatDuration(sla.remainingSeconds)} /{" "}
+            {formatDuration(sla.totalSeconds)}
+          </dd>
         </div>
         {performance !== null && (
           <>
@@ -1132,20 +1439,24 @@ function ContractCard({
             </div>
             <div>
               <dt>SLA state</dt>
-              <dd>
-                {performance >= 1
-                  ? "Healthy"
-                  : performance >= 0.5
-                    ? "Degraded"
-                    : "Violation"}
-              </dd>
+              <dd>{sla.state}</dd>
             </div>
           </>
         )}
       </dl>
+      <p className="sla-explanation">
+        Time below 100% fulfillment consumes this buffer. Healthy service
+        recovers it at {String(VIOLATION_RECOVERY_RATE)} seconds per second;
+        exhausting it breaches the contract.
+      </p>
+      <p className="readiness-explanation">{readiness.explanation}</p>
       {onAccept !== undefined && (
         <div className="button-row">
-          <button className="primary" onClick={onAccept}>
+          <button
+            className="primary"
+            disabled={!readiness.canAccept}
+            onClick={onAccept}
+          >
             Accept & assign to Rack A-01
           </button>
           {onReject !== undefined && <button onClick={onReject}>Reject</button>}
@@ -1237,6 +1548,77 @@ function StoreView({ state }: { state: GameState }) {
   );
 }
 
+function GameOver({ state }: { state: GameState }) {
+  const terminal = state.progression.terminalState;
+  const activeSlot = useAppStore((store) => store.activeSlot);
+  const returnToMenu = useAppStore((store) => store.returnToMenu);
+  const exportSlot = useAppStore((store) => store.exportSlot);
+  const deleteAndRestart = useAppStore(
+    (store) => store.deleteActiveCompanyAndStartOver,
+  );
+  if (terminal === null) return null;
+  const slotLabel = activeSlot?.replace("slot-", "Slot ") ?? "unknown slot";
+  const bankruptcy = terminal.kind === "bankrupt";
+  const tutorialFailed =
+    terminal.kind === "tutorial-failed" || terminal.tutorialFailed;
+  return (
+    <section
+      className="panel game-over"
+      role="alert"
+      aria-labelledby="game-over-title"
+    >
+      <p className="eyebrow">COMPANY TERMINAL STATE</p>
+      <h2 id="game-over-title">
+        {bankruptcy
+          ? "The company is bankrupt."
+          : "The first customer was lost."}
+      </h2>
+      {tutorialFailed && (
+        <p>
+          Gravy's Garden Blog exhausted its SLA buffer before the tutorial
+          completed. This save cannot continue normal play.
+        </p>
+      )}
+      {bankruptcy && (
+        <p>
+          Cash reached the −$10,000 bankruptcy threshold. The exact balance is{" "}
+          {formatMoney(state.company.cash, false)} for diagnostics.
+        </p>
+      )}
+      <p>
+        Affected save: <strong>{slotLabel}</strong> · {state.company.name}
+      </p>
+      <div className="button-row game-over-actions">
+        <button className="primary" onClick={() => void returnToMenu()}>
+          Return to main menu
+        </button>
+        <button
+          disabled={activeSlot === null}
+          onClick={() => {
+            if (activeSlot !== null) void exportSlot(activeSlot);
+          }}
+        >
+          Export diagnostic save
+        </button>
+        <button
+          className="danger"
+          onClick={() => {
+            if (
+              window.confirm(
+                `Delete ${slotLabel} (${state.company.name}) and start a new company? This cannot be undone.`,
+              )
+            ) {
+              void deleteAndRestart();
+            }
+          }}
+        >
+          Delete this company and start a new game
+        </button>
+      </div>
+    </section>
+  );
+}
+
 function PauseMenu() {
   const toggle = useAppStore((state) => state.togglePauseMenu);
   const saveNow = useAppStore((state) => state.saveNow);
@@ -1285,12 +1667,44 @@ function PauseMenu() {
   );
 }
 
-function InlineMessage({ message }: { message: string }) {
-  const clear = useAppStore((state) => state.clearMessage);
+export function NotificationStack() {
+  const notifications = useAppStore((state) => state.notifications);
   return (
-    <div className="inline-message" role="status">
-      <span>{message}</span>
-      <button aria-label="Dismiss message" onClick={clear}>
+    <aside className="notification-stack" aria-label="Notifications">
+      {notifications.map((notification) => (
+        <NotificationItem key={notification.id} notification={notification} />
+      ))}
+    </aside>
+  );
+}
+
+function NotificationItem({ notification }: { notification: AppNotification }) {
+  const dismiss = useAppStore((state) => state.dismissNotification);
+  useEffect(() => {
+    if (notification.durationMilliseconds === null) return;
+    const handle = window.setTimeout(() => {
+      dismiss(notification.id);
+    }, notification.durationMilliseconds);
+    return () => {
+      window.clearTimeout(handle);
+    };
+  }, [dismiss, notification.durationMilliseconds, notification.id]);
+  return (
+    <div
+      className={`notification ${notification.type}`}
+      role={
+        notification.type === "error" || notification.type === "warning"
+          ? "alert"
+          : "status"
+      }
+    >
+      <span>{notification.message}</span>
+      <button
+        aria-label="Dismiss notification"
+        onClick={() => {
+          dismiss(notification.id);
+        }}
+      >
         ×
       </button>
     </div>

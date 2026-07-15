@@ -10,6 +10,7 @@ import {
   fillStarterMarketplace,
 } from "./marketplace";
 import type { ContractInstance, GameState } from "./types";
+import { evaluateBankruptcy } from "./terminal";
 import { assertGameState } from "./validation";
 
 function cloneActiveContract(contract: ContractInstance): ContractInstance {
@@ -20,6 +21,13 @@ export function advanceGame(state: GameState, deltaSeconds: number): GameState {
   assertGameState(state);
   assertFiniteNonNegative(deltaSeconds, "deltaSeconds");
   if (deltaSeconds === 0) return state;
+  if (state.progression.terminalState !== null) return state;
+
+  const bankruptcyChecked = evaluateBankruptcy(state);
+  if (bankruptcyChecked !== state) {
+    assertGameState(bankruptcyChecked);
+    return bankruptcyChecked;
+  }
 
   let current: GameState = {
     ...state,
@@ -72,6 +80,7 @@ export function advanceGame(state: GameState, deltaSeconds: number): GameState {
     let breachedThisStep = 0;
     let reputationEarned = 0;
     const completedIds: string[] = [];
+    let tutorialFailed = false;
 
     for (const contract of current.contracts.active) {
       const score = performance.get(contract.id);
@@ -96,15 +105,16 @@ export function advanceGame(state: GameState, deltaSeconds: number): GameState {
       const breaches =
         score < 1 &&
         stepSeconds >= contract.customerTolerance - contract.violationSeconds;
-      if (completes) {
+      if (breaches) {
+        breachedThisStep += 1;
+        tutorialFailed ||= contract.id === TUTORIAL_CONTRACT_ID;
+      } else if (completes) {
         completedThisStep += 1;
         completedIds.push(contract.id);
         reputationEarned +=
           contract.id === TUTORIAL_CONTRACT_ID
             ? TUTORIAL_REPUTATION_REWARD
             : contract.tier;
-      } else if (breaches) {
-        breachedThisStep += 1;
       } else {
         nextActive.push({
           ...contract,
@@ -164,7 +174,21 @@ export function advanceGame(state: GameState, deltaSeconds: number): GameState {
     ) {
       current = fillStarterMarketplace(current);
     }
+    if (tutorialFailed) {
+      current = {
+        ...current,
+        progression: {
+          ...current.progression,
+          terminalState: {
+            kind: "tutorial-failed",
+            occurredAtSeconds: current.clockSeconds,
+          },
+        },
+      };
+    }
+    current = evaluateBankruptcy(current, tutorialFailed);
     secondsLeft = Math.max(0, secondsLeft - stepSeconds);
+    if (current.progression.terminalState !== null) break;
   }
 
   assertGameState(current);

@@ -32,7 +32,7 @@ export function createInitialState(
     rngSeed: seed,
     company: {
       name: companyName,
-      cash: 500,
+      cash: 0,
       reputation: 0,
       researchPoints: 0,
       lifetimeRevenue: 0,
@@ -94,7 +94,11 @@ export function createInitialState(
       currentStage: 1,
     })),
     research: { unlockedNodeIds: [] },
-    progression: { completedMilestones: [], prestigeCurrency: 0 },
+    progression: {
+      completedMilestones: [],
+      prestigeCurrency: 0,
+      terminalState: null,
+    },
     statistics: {
       startedAt,
       lastSavedAt: startedAt,

@@ -7,6 +7,10 @@ import {
   revenueMultiplier,
   validateContractRequirements,
 } from "./contracts";
+import {
+  calculateContractReadiness,
+  calculateSlaBuffer,
+} from "./contractStatus";
 import { DomainInvariantError } from "./errors";
 import type { ContractInstance, RackCapacity } from "./types";
 
@@ -141,5 +145,82 @@ describe("contract fulfillment", () => {
         compute: 1,
       }),
     ).toThrow(DomainInvariantError);
+  });
+
+  it("reports consumed, recovered, remaining, and breached SLA buffer", () => {
+    const warning = {
+      ...contract({ compute: 100 }),
+      customerTolerance: 45,
+      performanceScore: 0.8,
+      violationSeconds: 12,
+    };
+    expect(calculateSlaBuffer(warning)).toEqual({
+      totalSeconds: 45,
+      consumedSeconds: 12,
+      remainingSeconds: 33,
+      state: "Warning",
+    });
+    expect(
+      calculateSlaBuffer({
+        ...warning,
+        performanceScore: 1,
+        violationSeconds: 7,
+      }),
+    ).toMatchObject({ remainingSeconds: 38, state: "Recovering" });
+    expect(
+      calculateSlaBuffer({
+        ...warning,
+        performanceScore: 1,
+        violationSeconds: 0,
+      }),
+    ).toMatchObject({ remainingSeconds: 45, state: "Healthy" });
+    expect(calculateSlaBuffer({ ...warning, violationSeconds: 50 })).toEqual({
+      totalSeconds: 45,
+      consumedSeconds: 45,
+      remainingSeconds: 0,
+      state: "Breached",
+    });
+  });
+
+  it("uses one epsilon-aware readiness result for labels and acceptance", () => {
+    const tutorial = {
+      ...contract({ compute: 100 }),
+      id: "contract-tutorial-1",
+      status: "offered" as const,
+      assignedTargetId: undefined,
+    };
+    expect(
+      calculateContractReadiness(tutorial, capacity({ compute: 0 })),
+    ).toMatchObject({
+      kind: "install-hardware",
+      label: "INSTALL HARDWARE",
+      canAccept: false,
+    });
+    expect(
+      calculateContractReadiness(tutorial, capacity({ compute: 99 })),
+    ).toMatchObject({
+      kind: "capacity-shortfall",
+      label: "CAPACITY SHORTFALL",
+      canAccept: false,
+    });
+    expect(
+      calculateContractReadiness(tutorial, capacity({ compute: 100 - 5e-10 })),
+    ).toMatchObject({ kind: "ready", label: "READY", canAccept: true });
+    expect(
+      calculateContractReadiness(
+        { ...tutorial, status: "active", assignedTargetId: "rack-1" },
+        capacity({ compute: 100 }),
+      ),
+    ).toMatchObject({ kind: "active", label: "ACTIVE", canAccept: false });
+    expect(
+      calculateContractReadiness(
+        { ...tutorial, status: "active", assignedTargetId: "rack-1" },
+        capacity({ compute: 50 }),
+      ),
+    ).toMatchObject({
+      kind: "sla-warning",
+      label: "SLA WARNING",
+      canAccept: false,
+    });
   });
 });

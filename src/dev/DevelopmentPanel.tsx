@@ -77,7 +77,7 @@ export default function DevelopmentPanel({ onClose }: { onClose: () => void }) {
     };
   };
   const parsedCash = Number(cashAmount);
-  const cashValid = Number.isFinite(parsedCash) && parsedCash >= 0;
+  const cashValid = Number.isFinite(parsedCash);
   const copyDiagnostics = async () =>
     navigator.clipboard.writeText(diagnosticReport());
 
@@ -219,6 +219,31 @@ export default function DevelopmentPanel({ onClose }: { onClose: () => void }) {
                 command={{ type: "scenario", scenario: "marketplace" }}
               >
                 Marketplace unlocked
+              </CommandButton>
+              <CommandButton
+                command={{ type: "scenario", scenario: "tutorial-failed" }}
+              >
+                Tutorial failed
+              </CommandButton>
+              <CommandButton
+                command={{ type: "scenario", scenario: "debt-warning" }}
+              >
+                Debt −$9,999.99
+              </CommandButton>
+              <CommandButton
+                command={{ type: "scenario", scenario: "bankruptcy-at" }}
+              >
+                Bankruptcy at threshold
+              </CommandButton>
+              <CommandButton
+                command={{ type: "scenario", scenario: "bankruptcy-below" }}
+              >
+                Bankruptcy below threshold
+              </CommandButton>
+              <CommandButton
+                command={{ type: "scenario", scenario: "smart-reflow" }}
+              >
+                Smart rack reflow
               </CommandButton>
               <CommandButton
                 command={{ type: "scenario", scenario: "regional-metrics" }}

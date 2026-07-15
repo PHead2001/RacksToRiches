@@ -60,7 +60,7 @@ describe("initial state", () => {
   it("uses the README starting values and returns independent instances", () => {
     const first = createInitialState();
     const second = createInitialState();
-    expect(first.company.cash).toBe(500);
+    expect(first.company.cash).toBe(0);
     expect(first.facilities[0]?.racks[0]?.equipment).toEqual([]);
     expect(first.inventory).toHaveLength(4);
     expect(first.contracts.offers[0]?.baseRevenuePerSecond).toBe(2);

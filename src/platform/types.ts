@@ -74,7 +74,7 @@ export interface SaveRepository {
 }
 
 type UiScale = "compact" | "standard" | "large";
-type AutosaveInterval = 10 | 30 | 60;
+export type AutosaveInterval = 60 | 300 | 600 | 900 | 1800;
 
 export interface AppOptions {
   uiScale: UiScale;

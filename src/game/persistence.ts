@@ -81,6 +81,22 @@ const customerSchema = z
   })
   .strict();
 
+const terminalStateSchema = z.discriminatedUnion("kind", [
+  z
+    .object({
+      kind: z.literal("tutorial-failed"),
+      occurredAtSeconds: nonNegative,
+    })
+    .strict(),
+  z
+    .object({
+      kind: z.literal("bankrupt"),
+      occurredAtSeconds: nonNegative,
+      tutorialFailed: z.boolean(),
+    })
+    .strict(),
+]);
+
 export const gameStateSchema: z.ZodType<GameState> = z
   .object({
     version: z.literal(CURRENT_GAME_VERSION),
@@ -119,6 +135,7 @@ export const gameStateSchema: z.ZodType<GameState> = z
       .object({
         completedMilestones: z.array(z.string().min(1)),
         prestigeCurrency: nonNegative,
+        terminalState: terminalStateSchema.nullable(),
       })
       .strict(),
     statistics: z
@@ -149,7 +166,21 @@ interface SaveEnvelope {
 }
 
 export type SaveMigration = (state: unknown) => unknown;
-export const SAVE_MIGRATIONS: ReadonlyMap<number, SaveMigration> = new Map();
+const legacyRecordSchema = z.record(z.string(), z.unknown());
+
+const migrateVersionOne: SaveMigration = (state) => {
+  const record = legacyRecordSchema.parse(state);
+  const progression = legacyRecordSchema.parse(record["progression"]);
+  return {
+    ...record,
+    version: 2,
+    progression: { ...progression, terminalState: null },
+  };
+};
+
+export const SAVE_MIGRATIONS: ReadonlyMap<number, SaveMigration> = new Map([
+  [1, migrateVersionOne],
+]);
 
 const envelopeSchema = z
   .object({ version: z.number().int().nonnegative(), state: z.unknown() })

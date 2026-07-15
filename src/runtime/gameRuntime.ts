@@ -1,6 +1,6 @@
 import { advanceGame, assertGameState } from "../game";
 import type { GameState } from "../game";
-import type { Clock, Scheduler } from "../platform";
+import type { AutosaveInterval, Clock, Scheduler } from "../platform";
 
 export type RuntimeSpeed = 1 | 5 | 25 | 100;
 
@@ -10,7 +10,7 @@ export interface RuntimeSession {
   speed: RuntimeSpeed;
   freezeExpenses: boolean;
   autosaveEnabled: boolean;
-  autosaveIntervalSeconds: 10 | 30 | 60;
+  autosaveIntervalSeconds: AutosaveInterval;
 }
 
 export interface GameRuntimeDependencies {
@@ -82,6 +82,13 @@ export class GameRuntime {
           : advanced;
         assertGameState(next);
         this.dependencies.setState(next);
+        if (
+          session.state.progression.terminalState === null &&
+          next.progression.terminalState !== null
+        ) {
+          await this.dependencies.autosave();
+          this.lastAutosaveMilliseconds = now;
+        }
       }
       if (
         session.autosaveEnabled &&

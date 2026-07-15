@@ -12,24 +12,38 @@ export const DEFAULT_OPTIONS: AppOptions = {
   reducedMotion: false,
   compactNumbers: true,
   autosaveEnabled: true,
-  autosaveIntervalSeconds: 10,
+  autosaveIntervalSeconds: 300,
   fullscreen: false,
 };
 
-const optionsSchema = z
+const baseOptionsSchema = z
   .object({
     uiScale: z.enum(["compact", "standard", "large"]),
     reducedMotion: z.boolean(),
     compactNumbers: z.boolean(),
     autosaveEnabled: z.boolean(),
     autosaveIntervalSeconds: z.union([
-      z.literal(10),
-      z.literal(30),
       z.literal(60),
+      z.literal(300),
+      z.literal(600),
+      z.literal(900),
+      z.literal(1800),
     ]),
     fullscreen: z.boolean(),
   })
   .strict();
+
+const legacyOptionsSchema = baseOptionsSchema.extend({
+  autosaveIntervalSeconds: z.union([
+    z.literal(10),
+    z.literal(30),
+    z.literal(60),
+    z.literal(300),
+    z.literal(600),
+    z.literal(900),
+    z.literal(1800),
+  ]),
+});
 
 const OPTIONS_KEY = "racks-to-riches:options";
 
@@ -54,9 +68,19 @@ export class WebOptionsRepository implements OptionsRepository {
           },
         };
       }
-      const parsed = optionsSchema.safeParse(input);
+      const parsed = legacyOptionsSchema.safeParse(input);
       return parsed.success
-        ? { ok: true, value: parsed.data }
+        ? {
+            ok: true,
+            value: {
+              ...parsed.data,
+              autosaveIntervalSeconds:
+                parsed.data.autosaveIntervalSeconds === 10 ||
+                parsed.data.autosaveIntervalSeconds === 30
+                  ? 60
+                  : parsed.data.autosaveIntervalSeconds,
+            },
+          }
         : {
             ok: false,
             error: {
@@ -81,7 +105,7 @@ export class WebOptionsRepository implements OptionsRepository {
 
   async save(options: AppOptions): Promise<RepositoryResult<void>> {
     await Promise.resolve();
-    const parsed = optionsSchema.safeParse(options);
+    const parsed = baseOptionsSchema.safeParse(options);
     if (!parsed.success) {
       return {
         ok: false,

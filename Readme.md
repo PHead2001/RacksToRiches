@@ -1727,7 +1727,8 @@ interface GameState {
 
 ## Save behavior
 
-- Autosave every ten seconds.
+- Autosave is enabled by default every five minutes.
+- Players may choose 1, 5, 10, 15, or 30 minute intervals.
 - Save when major transactions occur.
 - Save when the browser tab becomes hidden.
 - Save before unload when supported.
@@ -1936,22 +1937,39 @@ save writes use isolated temporary, current, backup, and preserved-corrupt
 records. Import validation occurs before any current data is replaced. Invalid
 or unsupported data is never silently reset or deleted.
 
+Routine saves and tutorial completion use dismissible bottom-right typed
+notifications that expire after five seconds. Actionable warnings and errors
+remain until dismissed. Repeated autosaves replace the prior save notification.
+
 Global options are stored separately from game slots. Phase 2 options are fixed
 UI scale, reduced motion, compact or expanded number formatting, autosave,
 fixed autosave intervals, and fullscreen when the platform supports it. Audio
 settings remain outside Phase 2 because audio does not exist yet.
 
-The playable slice begins in the bedroom with the Phase 1 starter rack,
-inventory, cash, and Gravy's Garden Blog offer. The Facility screen provides a
-keyboard- and click-operable 12U grid, inventory installation, installed-item
+Interface scale changes preview immediately while Options is open. Leaving
+without saving restores the persisted scale. Autosave intervals are 1, 5, 10,
+15, and 30 minutes, with five minutes as the default. Legacy Phase 2 option
+records using 10 or 30 seconds migrate to one minute; the legacy 60-second
+choice remains one minute.
+
+The playable slice begins in the bedroom with the Phase 1 starter rack, four
+inventory items, zero cash, and Gravy's Garden Blog offer. Electricity expense
+is explicitly waived by the pure simulation until the tutorial completes or
+fails. The Facility screen provides a keyboard- and click-operable 12U grid,
+pointer and touch drag interactions, inventory installation, installed-item
 move and removal controls, power toggles, live capacity telemetry, and explicit
-power or cooling throttling warnings. All rack changes go through typed pure
-domain commands.
+power or cooling throttling warnings. Rack-unit selection is an anchor: large
+items clamp naturally at rack edges, choose the nearest valid span, and
+deterministically reflow existing hardware when necessary. Click, keyboard, and
+drag interactions all commit through the same typed pure layout command.
 
 The tutorial offer can be accepted and assigned to the starter rack and remains
 recoverable until acceptance. The Contracts screen shows requirements,
 per-resource fulfillment, duration, revenue multiplier output, actual revenue,
-SLA state, and remaining time. Completion grants the centralized tutorial
+SLA state, total and remaining SLA buffer, and remaining time. Time below 100%
+fulfillment consumes the buffer, while healthy service recovers it at the
+centralized recovery rate. Readiness labels distinguish missing hardware from
+an actual capacity shortfall. Completion grants the centralized tutorial
 reputation reward, records the tutorial milestone, unlocks the bedroom hardware
 store, and fills three deterministic Bedroom Host marketplace slots. Accepting,
 rejecting, or expiring a starter offer deterministically refills its slot from
@@ -1983,6 +2001,14 @@ failures enter a recovery UI with diagnostic copy, valid-state export, reload,
 and return-to-menu controls. Bootstrap failures render a styled fatal fallback
 instead of a blank page. Error history is in-memory and bounded; no telemetry is
 sent anywhere.
+
+Tutorial SLA exhaustion persists a terminal tutorial-failed state, autosaves,
+and returns to the game-over screen after reload. Debt remains playable below
+$0. Cash-based failure occurs only at the centralized bankruptcy threshold of
+-$10,000. Crossing that threshold preserves the exact cash value, persists the
+terminal state, stops normal simulation, and offers return, export, and
+confirmed delete/start-over actions. Existing version-one saves migrate to the
+new terminal-state schema without changing their recorded cash.
 
 The placeholder interface is desktop-first and cyber-industrial, with semantic
 controls, visible keyboard focus, reduced-motion support, responsive save and
@@ -2051,7 +2077,7 @@ Build:
 
 The player begins with:
 
-- $500
+- $0
 - One bedroom facility
 - One empty 12U rack
 - One refurbished desktop server
@@ -2079,6 +2105,11 @@ Duration:
 ```
 
 The player installs the equipment, assigns the contract, and begins earning revenue.
+
+Electricity is waived until this tutorial completes or fails. Successful
+completion pays enough to purchase at least one meaningful starter item. A
+tutorial SLA breach is a persistent game-over condition. Debt above -$10,000 is
+allowed; reaching or crossing -$10,000 triggers bankruptcy.
 
 After completing the tutorial contract:
 

@@ -5,12 +5,12 @@ import {
   advanceGame,
   assertGameState,
   createInitialState,
+  evaluateBankruptcy,
   fillStarterMarketplace,
-  moveEquipment,
   placeEquipment,
   purchaseEquipment,
+  relocateEquipment,
   rejectContractOffer,
-  removeEquipment,
   setEquipmentPower,
   stampLastSaved,
   TUTORIAL_MILESTONE_ID,
@@ -39,6 +39,22 @@ type AppScreen =
   "boot" | "menu" | "new-game" | "load" | "options" | "credits" | "game";
 type GameView = "facility" | "contracts" | "store";
 type SaveStatus = "idle" | "saving" | "saved" | "failed";
+type NotificationType = "success" | "information" | "warning" | "error";
+
+export interface AppNotification {
+  id: string;
+  key: string | null;
+  type: NotificationType;
+  message: string;
+  durationMilliseconds: number | null;
+}
+
+interface NotificationInput {
+  key?: string;
+  type: NotificationType;
+  message: string;
+  durationMilliseconds?: number;
+}
 
 export type DevelopmentCommand =
   | { type: "add-cash"; amount: number }
@@ -64,6 +80,11 @@ export type DevelopmentCommand =
         | "overloaded-power"
         | "insufficient-cooling"
         | "marketplace"
+        | "tutorial-failed"
+        | "debt-warning"
+        | "bankruptcy-at"
+        | "bankruptcy-below"
+        | "smart-reflow"
         | "regional-metrics";
     };
 
@@ -83,8 +104,10 @@ export interface AppStoreState {
   gameState: GameState | null;
   activeSlot: SaveSlotId | null;
   saveStatus: SaveStatus;
-  message: string | null;
+  notifications: readonly AppNotification[];
+  previewUiScale: AppOptions["uiScale"] | null;
   pauseMenuOpen: boolean;
+  dragActive: boolean;
   paused: boolean;
   speed: RuntimeSpeed;
   freezeExpenses: boolean;
@@ -95,21 +118,29 @@ export interface AppStoreState {
   boot: () => Promise<void>;
   navigate: (screen: AppScreen) => void;
   setGameView: (view: GameView) => void;
-  clearMessage: () => void;
+  notify: (notification: NotificationInput) => void;
+  dismissNotification: (notificationId: string) => void;
+  setUiScalePreview: (scale: AppOptions["uiScale"] | null) => void;
   createGame: (slotId: SaveSlotId, companyName: string) => Promise<boolean>;
   continueGame: () => Promise<boolean>;
   loadSlot: (slotId: SaveSlotId) => Promise<boolean>;
   saveNow: () => Promise<boolean>;
   returnToMenu: (withoutSaving?: boolean) => Promise<boolean>;
   deleteSlot: (slotId: SaveSlotId) => Promise<boolean>;
+  deleteActiveCompanyAndStartOver: () => Promise<boolean>;
   restoreBackup: (slotId: SaveSlotId) => Promise<boolean>;
   exportSlot: (slotId: SaveSlotId) => Promise<boolean>;
   importSlot: (slotId: SaveSlotId, file: TextFile) => Promise<boolean>;
   updateOptions: (options: AppOptions) => Promise<boolean>;
   togglePauseMenu: (open?: boolean) => void;
+  setDragActive: (active: boolean) => void;
   installEquipment: (equipmentId: string, startUnit: number) => boolean;
   moveInstalledEquipment: (equipmentId: string, startUnit: number) => boolean;
   removeInstalledEquipment: (equipmentId: string) => boolean;
+  previewEquipmentRelocation: (
+    equipmentId: string,
+    startUnit: number,
+  ) => ReturnType<typeof relocateEquipment> | null;
   toggleEquipment: (equipmentId: string, poweredOn: boolean) => boolean;
   buyEquipment: (definitionId: string) => boolean;
   acceptOffer: (contractId: string) => boolean;
@@ -157,6 +188,72 @@ function scenarioState(
     );
     if (!accepted.ok) throw new Error(accepted.error.message);
     return accepted.state;
+  }
+  if (scenario === "tutorial-failed") {
+    const ready = tutorialReady(fresh);
+    const accepted = acceptContract(
+      ready,
+      "contract-tutorial-1",
+      "rack-starter-1",
+    );
+    if (!accepted.ok) throw new Error(accepted.error.message);
+    const active = accepted.state.contracts.active[0];
+    if (active === undefined) throw new Error("Tutorial contract is missing");
+    return advanceGame(
+      {
+        ...accepted.state,
+        facilities: accepted.state.facilities.map((facility) => ({
+          ...facility,
+          racks: facility.racks.map((rack) => ({
+            ...rack,
+            equipment: rack.equipment.map((equipment) => ({
+              ...equipment,
+              poweredOn: false,
+            })),
+          })),
+        })),
+        contracts: {
+          ...accepted.state.contracts,
+          active: [
+            {
+              ...active,
+              violationSeconds: active.customerTolerance - 1,
+            },
+          ],
+        },
+      },
+      1,
+    );
+  }
+  if (scenario === "debt-warning") {
+    return { ...fresh, company: { ...fresh.company, cash: -9_999.99 } };
+  }
+  if (scenario === "bankruptcy-at" || scenario === "bankruptcy-below") {
+    return evaluateBankruptcy({
+      ...fresh,
+      company: {
+        ...fresh.company,
+        cash: scenario === "bankruptcy-at" ? -10_000 : -10_001,
+      },
+    });
+  }
+  if (scenario === "smart-reflow") {
+    let layout = fresh;
+    for (const [id, anchor] of [
+      ["equipment-router-1", 6],
+      ["equipment-power-strip-1", 7],
+      ["equipment-desk-fan-1", 8],
+      ["equipment-refurbished-1", 11],
+    ] as const) {
+      const result = relocateEquipment(layout, id, {
+        kind: "rack",
+        rackId: "rack-starter-1",
+        anchorUnit: anchor,
+      });
+      if (!result.ok) throw new Error(result.error.message);
+      layout = result.state;
+    }
+    return layout;
   }
   if (scenario === "overloaded-power" || scenario === "insufficient-cooling") {
     const rack = fresh.facilities[0]?.racks[0];
@@ -207,8 +304,28 @@ export function createGameStore(
   dependencies: AppStoreDependencies,
 ): StoreApi<AppStoreState> {
   const errorLog = new BoundedErrorLog(dependencies.clock, 30);
+  let notificationSequence = 0;
 
   return createStore<AppStoreState>()((set, get) => {
+    const pushNotification = (input: NotificationInput): void => {
+      notificationSequence += 1;
+      const notification: AppNotification = {
+        id: `notification-${String(notificationSequence)}`,
+        key: input.key ?? null,
+        type: input.type,
+        message: input.message,
+        durationMilliseconds: input.durationMilliseconds ?? null,
+      };
+      set((state) => ({
+        notifications: [
+          ...state.notifications.filter(
+            (existing) =>
+              notification.key === null || existing.key !== notification.key,
+          ),
+          notification,
+        ].slice(-6),
+      }));
+    };
     const refreshSlots = async (): Promise<boolean> => {
       const listed = await dependencies.saves.list();
       if (!listed.ok) {
@@ -221,10 +338,14 @@ export function createGameStore(
 
     const applyResult = (result: GameCommandResult): boolean => {
       if (!result.ok) {
-        set({ message: result.error.message });
+        pushNotification({
+          key: "command-error",
+          type: "warning",
+          message: result.error.message,
+        });
         return false;
       }
-      set({ gameState: result.state, message: null });
+      set({ gameState: result.state });
       return true;
     };
 
@@ -236,8 +357,10 @@ export function createGameStore(
       gameState: null,
       activeSlot: null,
       saveStatus: "idle",
-      message: null,
+      notifications: [],
+      previewUiScale: null,
       pauseMenuOpen: false,
+      dragActive: false,
       paused: false,
       speed: 1,
       freezeExpenses: false,
@@ -257,19 +380,33 @@ export function createGameStore(
       },
 
       navigate: (screen) => {
-        set({ screen, message: null });
+        set({ screen, previewUiScale: null });
       },
       setGameView: (gameView) => {
         set({ gameView });
       },
-      clearMessage: () => {
-        set({ message: null });
+      notify: (notification) => {
+        pushNotification(notification);
+      },
+      dismissNotification: (notificationId) => {
+        set((state) => ({
+          notifications: state.notifications.filter(
+            ({ id }) => id !== notificationId,
+          ),
+        }));
+      },
+      setUiScalePreview: (previewUiScale) => {
+        set({ previewUiScale });
       },
 
       createGame: async (slotId, companyName) => {
         const trimmed = companyName.trim();
         if (trimmed.length === 0 || trimmed.length > 60) {
-          set({ message: "Enter a company name between 1 and 60 characters." });
+          pushNotification({
+            key: "new-game-error",
+            type: "warning",
+            message: "Enter a company name between 1 and 60 characters.",
+          });
           return false;
         }
         const now = dependencies.clock.now();
@@ -290,7 +427,9 @@ export function createGameStore(
         });
         if (!saved.ok) {
           get().recordError(saved.error, "save");
-          set({
+          pushNotification({
+            key: "save-error",
+            type: "error",
             message: `${saved.error.message}. Check browser storage and try again.`,
           });
           return false;
@@ -303,8 +442,13 @@ export function createGameStore(
           saveStatus: "saved",
           developmentModified: false,
           pauseMenuOpen: false,
+        });
+        pushNotification({
+          key: "onboarding",
+          type: "information",
           message:
-            "New company created. Install the four starter items in the rack.",
+            "Install the four starter items, then review Gravy's contract.",
+          durationMilliseconds: 5_000,
         });
         await refreshSlots();
         return true;
@@ -317,7 +461,12 @@ export function createGameStore(
             (left, right) => (right.lastPlayed ?? 0) - (left.lastPlayed ?? 0),
           )[0];
         if (candidate === undefined) {
-          set({ message: "No valid save is available to continue." });
+          pushNotification({
+            key: "continue-error",
+            type: "information",
+            message: "No valid save is available to continue.",
+            durationMilliseconds: 5_000,
+          });
           return false;
         }
         return get().loadSlot(candidate.slotId);
@@ -327,7 +476,11 @@ export function createGameStore(
         const loaded = await dependencies.saves.load(slotId);
         if (!loaded.ok) {
           get().recordError(loaded.error, "save");
-          set({ message: loaded.error.message });
+          pushNotification({
+            key: "load-error",
+            type: "error",
+            message: loaded.error.message,
+          });
           return false;
         }
         set({
@@ -338,7 +491,6 @@ export function createGameStore(
           developmentModified: loaded.value.developmentModified,
           saveStatus: "saved",
           pauseMenuOpen: false,
-          message: null,
         });
         return true;
       },
@@ -356,13 +508,23 @@ export function createGameStore(
         });
         if (!saved.ok) {
           get().recordError(saved.error, "save");
-          set({ saveStatus: "failed", message: saved.error.message });
+          set({ saveStatus: "failed" });
+          pushNotification({
+            key: "save-error",
+            type: "error",
+            message: saved.error.message,
+          });
           return false;
         }
         set({
           gameState: stamped,
           saveStatus: "saved",
+        });
+        pushNotification({
+          key: "save-success",
+          type: "success",
           message: "Game saved.",
+          durationMilliseconds: 5_000,
         });
         await refreshSlots();
         return true;
@@ -370,8 +532,10 @@ export function createGameStore(
 
       returnToMenu: async (withoutSaving = false) => {
         if (!withoutSaving && !(await get().saveNow())) {
-          set({
-            pauseMenuOpen: true,
+          set({ pauseMenuOpen: true });
+          pushNotification({
+            key: "save-error",
+            type: "error",
             message: "Saving failed. Cancel, retry, or return without saving.",
           });
           return false;
@@ -383,7 +547,6 @@ export function createGameStore(
           pauseMenuOpen: false,
           paused: false,
           speed: 1,
-          message: null,
         });
         await refreshSlots();
         return true;
@@ -393,11 +556,40 @@ export function createGameStore(
         const deleted = await dependencies.saves.delete(slotId);
         if (!deleted.ok) {
           get().recordError(deleted.error, "save");
-          set({ message: deleted.error.message });
+          pushNotification({
+            key: "delete-error",
+            type: "error",
+            message: deleted.error.message,
+          });
           return false;
         }
         await refreshSlots();
-        set({ message: `${slotId.replace("slot-", "Slot ")} deleted.` });
+        pushNotification({
+          key: "slot-action",
+          type: "information",
+          message: `${slotId.replace("slot-", "Slot ")} deleted.`,
+          durationMilliseconds: 5_000,
+        });
+        return true;
+      },
+
+      deleteActiveCompanyAndStartOver: async () => {
+        const slotId = get().activeSlot;
+        if (slotId === null) return false;
+        const deleted = await dependencies.saves.delete(slotId);
+        if (!deleted.ok) {
+          get().recordError(deleted.error, "save");
+          return false;
+        }
+        set({
+          screen: "new-game",
+          gameState: null,
+          activeSlot: null,
+          pauseMenuOpen: false,
+          paused: false,
+          speed: 1,
+        });
+        await refreshSlots();
         return true;
       },
 
@@ -405,11 +597,20 @@ export function createGameStore(
         const restored = await dependencies.saves.restoreBackup(slotId);
         if (!restored.ok) {
           get().recordError(restored.error, "save");
-          set({ message: restored.error.message });
+          pushNotification({
+            key: "restore-error",
+            type: "error",
+            message: restored.error.message,
+          });
           return false;
         }
         await refreshSlots();
-        set({ message: "Last-known-good backup restored." });
+        pushNotification({
+          key: "slot-action",
+          type: "success",
+          message: "Last-known-good backup restored.",
+          durationMilliseconds: 5_000,
+        });
         return true;
       },
 
@@ -417,7 +618,11 @@ export function createGameStore(
         const exported = await dependencies.saves.export(slotId);
         if (!exported.ok) {
           get().recordError(exported.error, "save");
-          set({ message: exported.error.message });
+          pushNotification({
+            key: "export-error",
+            type: "error",
+            message: exported.error.message,
+          });
           return false;
         }
         const downloaded = dependencies.files.downloadJson(
@@ -428,7 +633,12 @@ export function createGameStore(
           get().recordError(downloaded.error, "save");
           return false;
         }
-        set({ message: "Save exported." });
+        pushNotification({
+          key: "slot-action",
+          type: "success",
+          message: "Save exported.",
+          durationMilliseconds: 5_000,
+        });
         return true;
       },
 
@@ -436,7 +646,11 @@ export function createGameStore(
         const read = await dependencies.files.readText(file);
         if (!read.ok) {
           get().recordError(read.error, "import");
-          set({ message: read.error.message });
+          pushNotification({
+            key: "import-error",
+            type: "error",
+            message: read.error.message,
+          });
           return false;
         }
         const imported = await dependencies.saves.import(slotId, read.value, {
@@ -445,11 +659,20 @@ export function createGameStore(
         });
         if (!imported.ok) {
           get().recordError(imported.error, "import");
-          set({ message: "Import failed. The existing slot was not changed." });
+          pushNotification({
+            key: "import-error",
+            type: "error",
+            message: "Import failed. The existing slot was not changed.",
+          });
           return false;
         }
         await refreshSlots();
-        set({ message: "Save imported successfully." });
+        pushNotification({
+          key: "slot-action",
+          type: "success",
+          message: "Save imported successfully.",
+          durationMilliseconds: 5_000,
+        });
         return true;
       },
 
@@ -457,7 +680,11 @@ export function createGameStore(
         const saved = await dependencies.options.save(options);
         if (!saved.ok) {
           get().recordError(saved.error, "storage");
-          set({ message: saved.error.message });
+          pushNotification({
+            key: "options-error",
+            type: "error",
+            message: saved.error.message,
+          });
           return false;
         }
         if (dependencies.fullscreen.supported) {
@@ -466,44 +693,88 @@ export function createGameStore(
           );
           if (!fullscreen.ok) get().recordError(fullscreen.error, "global");
         }
-        set({ options, message: "Options saved." });
+        set({ options, previewUiScale: null });
+        pushNotification({
+          key: "options-saved",
+          type: "success",
+          message: "Options saved.",
+          durationMilliseconds: 5_000,
+        });
         return true;
       },
 
       togglePauseMenu: (open) => {
         set((state) => ({ pauseMenuOpen: open ?? !state.pauseMenuOpen }));
       },
+      setDragActive: (dragActive) => {
+        set({ dragActive });
+      },
 
       installEquipment: (equipmentId, startUnit) => {
         const state = get().gameState;
         if (state === null) return false;
-        const result = placeEquipment(
-          state,
-          equipmentId,
-          "rack-starter-1",
-          startUnit,
-        );
+        const result = relocateEquipment(state, equipmentId, {
+          kind: "rack",
+          rackId: "rack-starter-1",
+          anchorUnit: startUnit,
+        });
         if (!result.ok) {
-          set({ message: result.error.message });
+          pushNotification({
+            key: "placement",
+            type: "warning",
+            message: result.error.message,
+          });
           return false;
         }
-        set({ gameState: result.state, message: "Equipment installed." });
+        set({ gameState: result.state });
         return true;
       },
 
       moveInstalledEquipment: (equipmentId, startUnit) => {
         const state = get().gameState;
-        return state === null
-          ? false
-          : applyResult(
-              moveEquipment(state, equipmentId, "rack-starter-1", startUnit),
-            );
+        if (state === null) return false;
+        const result = relocateEquipment(state, equipmentId, {
+          kind: "rack",
+          rackId: "rack-starter-1",
+          anchorUnit: startUnit,
+        });
+        if (!result.ok) {
+          pushNotification({
+            key: "placement",
+            type: "warning",
+            message: result.error.message,
+          });
+          return false;
+        }
+        set({ gameState: result.state });
+        return true;
       },
       removeInstalledEquipment: (equipmentId) => {
         const state = get().gameState;
+        if (state === null) return false;
+        const result = relocateEquipment(state, equipmentId, {
+          kind: "inventory",
+        });
+        if (!result.ok) {
+          pushNotification({
+            key: "placement",
+            type: "warning",
+            message: result.error.message,
+          });
+          return false;
+        }
+        set({ gameState: result.state });
+        return true;
+      },
+      previewEquipmentRelocation: (equipmentId, startUnit) => {
+        const state = get().gameState;
         return state === null
-          ? false
-          : applyResult(removeEquipment(state, equipmentId));
+          ? null
+          : relocateEquipment(state, equipmentId, {
+              kind: "rack",
+              rackId: "rack-starter-1",
+              anchorUnit: startUnit,
+            });
       },
       toggleEquipment: (equipmentId, poweredOn) => {
         const state = get().gameState;
@@ -531,12 +802,34 @@ export function createGameStore(
       },
 
       setRuntimeState: (gameState) => {
+        const previous = get().gameState;
         set({ gameState });
+        const completedBefore =
+          previous?.progression.completedMilestones.includes(
+            TUTORIAL_MILESTONE_ID,
+          ) ?? false;
+        const completedNow = gameState.progression.completedMilestones.includes(
+          TUTORIAL_MILESTONE_ID,
+        );
+        if (!completedBefore && completedNow) {
+          pushNotification({
+            key: "tutorial-complete",
+            type: "success",
+            message:
+              "Tutorial complete · Store and starter marketplace unlocked.",
+            durationMilliseconds: 5_000,
+          });
+        }
       },
 
       recordError: (error, source) => {
         const record = errorLog.add(error, source);
-        set({ errors: errorLog.list(), message: record.message });
+        set({ errors: errorLog.list() });
+        pushNotification({
+          key: `error-${source}`,
+          type: "error",
+          message: record.message,
+        });
       },
 
       applyDevelopmentCommand: (command) => {
@@ -546,19 +839,19 @@ export function createGameStore(
         try {
           switch (command.type) {
             case "add-cash":
-              next = {
+              next = evaluateBankruptcy({
                 ...state,
                 company: {
                   ...state.company,
                   cash: state.company.cash + command.amount,
                 },
-              };
+              });
               break;
             case "set-cash":
-              next = {
+              next = evaluateBankruptcy({
                 ...state,
                 company: { ...state.company, cash: command.amount },
-              };
+              });
               break;
             case "add-reputation":
               next = {
@@ -721,8 +1014,36 @@ export function createGameStore(
           undoState: state,
           developmentModified: true,
           developmentLog: [...get().developmentLog, entry].slice(-20),
-          message: "Development command applied.",
         });
+        const tutorialCompleted =
+          command.type !== "scenario" &&
+          !state.progression.completedMilestones.includes(
+            TUTORIAL_MILESTONE_ID,
+          ) &&
+          next.progression.completedMilestones.includes(TUTORIAL_MILESTONE_ID);
+        if (tutorialCompleted) {
+          pushNotification({
+            key: "tutorial-complete",
+            type: "success",
+            message:
+              "Tutorial complete · Store and starter marketplace unlocked.",
+            durationMilliseconds: 5_000,
+          });
+        }
+        if (command.type === "scenario") {
+          set({
+            pauseMenuOpen: false,
+            notifications: get().notifications.filter(
+              ({ durationMilliseconds }) => durationMilliseconds === null,
+            ),
+          });
+        }
+        if (
+          state.progression.terminalState === null &&
+          next.progression.terminalState !== null
+        ) {
+          void get().saveNow();
+        }
         return true;
       },
 
@@ -737,7 +1058,6 @@ export function createGameStore(
             ...get().developmentLog,
             "Latest development command undone",
           ].slice(-20),
-          message: "Development command undone.",
         });
         return true;
       },

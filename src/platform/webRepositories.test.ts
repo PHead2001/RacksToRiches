@@ -174,9 +174,27 @@ describe("WebOptionsRepository", () => {
     const options = {
       ...DEFAULT_OPTIONS,
       reducedMotion: true,
-      autosaveIntervalSeconds: 30 as const,
+      autosaveIntervalSeconds: 300 as const,
     };
     expect(await repository.save(options)).toMatchObject({ ok: true });
     expect(await repository.load()).toEqual({ ok: true, value: options });
+  });
+
+  it("uses a five-minute default and migrates legacy short intervals", async () => {
+    const storage = new MemoryStorage();
+    const repository = new WebOptionsRepository(storage);
+    expect(DEFAULT_OPTIONS.autosaveIntervalSeconds).toBe(300);
+    for (const [legacy, expected] of [
+      [10, 60],
+      [30, 60],
+      [60, 60],
+    ] as const) {
+      storage.values.set(
+        "racks-to-riches:options",
+        JSON.stringify({ ...DEFAULT_OPTIONS, autosaveIntervalSeconds: legacy }),
+      );
+      const loaded = await repository.load();
+      expect(loaded.ok && loaded.value.autosaveIntervalSeconds).toBe(expected);
+    }
   });
 });

@@ -4,10 +4,12 @@ import {
   getRackDefinition,
 } from "./definitions";
 import { assertFiniteNonNegative } from "./errors";
+import { calculateAllRackCapacities } from "./capacity";
+import { calculateContractReadiness } from "./contractStatus";
 import { TUTORIAL_CONTRACT_ID, fillStarterMarketplace } from "./marketplace";
-import { placeEquipment } from "./placement";
+import { relocateEquipment } from "./placement";
 import { nextRandom } from "./random";
-import type { EquipmentPlacement, GameState } from "./types";
+import type { GameState } from "./types";
 import { assertGameState } from "./validation";
 
 export type GameCommandErrorCode =
@@ -18,6 +20,7 @@ export type GameCommandErrorCode =
   | "INSUFFICIENT_CASH"
   | "LOCKED"
   | "TUTORIAL_REQUIRED"
+  | "REQUIREMENTS_NOT_MET"
   | "DUPLICATE_INSTANCE";
 
 export type GameCommandResult =
@@ -52,32 +55,17 @@ export function removeEquipment(
   state: GameState,
   equipmentId: string,
 ): GameCommandResult {
-  let removed: EquipmentPlacement | undefined;
-  const facilities = state.facilities.map((facility) => ({
-    ...facility,
-    racks: facility.racks.map((rack) => {
-      const placement = rack.equipment.find(({ id }) => id === equipmentId);
-      if (placement === undefined) return rack;
-      removed = placement;
-      return {
-        ...rack,
-        equipment: rack.equipment.filter(({ id }) => id !== equipmentId),
-      };
-    }),
-  }));
-  if (removed === undefined)
-    return failure(
-      "NOT_FOUND",
-      `Installed equipment not found: ${equipmentId}`,
-    );
-  return success({
-    ...state,
-    facilities,
-    inventory: [
-      ...state.inventory,
-      { id: removed.id, definitionId: removed.definitionId },
-    ],
+  const relocated = relocateEquipment(state, equipmentId, {
+    kind: "inventory",
   });
+  return relocated.ok
+    ? success(relocated.state)
+    : failure(
+        relocated.error.code === "UNKNOWN_EQUIPMENT_INSTANCE"
+          ? "NOT_FOUND"
+          : "INVALID_PLACEMENT",
+        relocated.error.message,
+      );
 }
 
 export function moveEquipment(
@@ -86,21 +74,19 @@ export function moveEquipment(
   rackId: string,
   startUnit: number,
 ): GameCommandResult {
-  const installed = state.facilities
-    .flatMap(({ racks }) => racks)
-    .flatMap(({ equipment }) => equipment)
-    .find(({ id }) => id === equipmentId);
-  if (installed === undefined)
-    return failure(
-      "NOT_FOUND",
-      `Installed equipment not found: ${equipmentId}`,
-    );
-  const removed = removeEquipment(state, equipmentId);
-  if (!removed.ok) return removed;
-  const placed = placeEquipment(removed.state, equipmentId, rackId, startUnit);
-  if (!placed.ok) return failure("INVALID_PLACEMENT", placed.error.message);
-  if (installed.poweredOn) return success(placed.state);
-  return setEquipmentPower(placed.state, equipmentId, false);
+  const relocated = relocateEquipment(state, equipmentId, {
+    kind: "rack",
+    rackId,
+    anchorUnit: startUnit,
+  });
+  return relocated.ok
+    ? success(relocated.state)
+    : failure(
+        relocated.error.code === "UNKNOWN_EQUIPMENT_INSTANCE"
+          ? "NOT_FOUND"
+          : "INVALID_PLACEMENT",
+        relocated.error.message,
+      );
 }
 
 export function setEquipmentPower(
@@ -189,6 +175,16 @@ export function acceptContract(
   );
   if (!rackExists)
     return failure("INVALID_TARGET", `Rack not found: ${rackId}`);
+  if (offer.id === TUTORIAL_CONTRACT_ID) {
+    const capacity = calculateAllRackCapacities(state).get(rackId);
+    if (capacity === undefined) {
+      return failure("INVALID_TARGET", `Rack not found: ${rackId}`);
+    }
+    const readiness = calculateContractReadiness(offer, capacity);
+    if (!readiness.canAccept) {
+      return failure("REQUIREMENTS_NOT_MET", readiness.explanation);
+    }
+  }
   const next = {
     ...state,
     contracts: {

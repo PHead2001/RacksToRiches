@@ -113,6 +113,20 @@ export function assertGameState(state: GameState): void {
   ] as const) {
     assertFiniteNonNegative(value, label);
   }
+  if (state.progression.terminalState !== null) {
+    assertFiniteNonNegative(
+      state.progression.terminalState.occurredAtSeconds,
+      "progression.terminalState.occurredAtSeconds",
+    );
+    if (
+      state.progression.terminalState.occurredAtSeconds > state.clockSeconds
+    ) {
+      throw new DomainInvariantError(
+        "INVALID_STATE",
+        "Terminal state cannot occur after the current game clock",
+      );
+    }
+  }
 
   const facilityIds = state.facilities.map(({ id }) => id);
   assertUnique(facilityIds, "Facility instance");

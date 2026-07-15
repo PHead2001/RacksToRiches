@@ -101,7 +101,8 @@ export function formatMoney(value: number, compact: boolean): string {
   ] as const;
   const unit = units.find(([threshold]) => Math.abs(value) >= threshold);
   if (unit === undefined) return `$${value.toFixed(2)}`;
-  return `$${(value / unit[0]).toFixed(2)}${unit[1]}`;
+  const sign = value < 0 ? "-" : "";
+  return `${sign}$${(Math.abs(value) / unit[0]).toFixed(2)}${unit[1]}`;
 }
 
 export function formatDuration(seconds: number): string {

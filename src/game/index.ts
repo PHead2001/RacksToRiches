@@ -1,4 +1,10 @@
 export { advanceGame } from "./advanceGame";
+export {
+  BANKRUPTCY_THRESHOLD,
+  CURRENT_GAME_VERSION,
+  FULFILLMENT_EPSILON,
+  VIOLATION_RECOVERY_RATE,
+} from "./constants";
 export { calculateAllRackCapacities, calculateRackCapacity } from "./capacity";
 export {
   aggregateContractDemand,
@@ -7,6 +13,15 @@ export {
   revenueMultiplier,
   validateContractRequirements,
 } from "./contracts";
+export {
+  calculateContractReadiness,
+  calculateSlaBuffer,
+} from "./contractStatus";
+export type {
+  ContractReadiness,
+  ContractReadinessKind,
+  SlaBuffer,
+} from "./contractStatus";
 export {
   CUSTOMER_DEFINITIONS,
   EQUIPMENT_DEFINITIONS,
@@ -35,8 +50,12 @@ export { DomainInvariantError } from "./errors";
 export { createInitialState } from "./initialState";
 export { gameStateSchema, loadGame, serializeGame } from "./persistence";
 export type { LoadError, LoadResult, SaveMigration } from "./persistence";
-export { placeEquipment } from "./placement";
-export type { PlacementErrorCode, PlacementResult } from "./placement";
+export { placeEquipment, relocateEquipment } from "./placement";
+export type {
+  EquipmentTarget,
+  PlacementErrorCode,
+  PlacementResult,
+} from "./placement";
 export { nextRandom, randomInteger } from "./random";
 export {
   STARTER_MARKETPLACE_SIZE,
@@ -47,4 +66,5 @@ export {
   generateStarterOffer,
 } from "./marketplace";
 export { assertGameState } from "./validation";
+export { evaluateBankruptcy, isTerminal } from "./terminal";
 export type * from "./types";

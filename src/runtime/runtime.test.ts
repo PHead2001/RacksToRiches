@@ -37,7 +37,7 @@ describe("GameRuntime", () => {
       speed: 5,
       freezeExpenses: false,
       autosaveEnabled: false,
-      autosaveIntervalSeconds: 10,
+      autosaveIntervalSeconds: 60,
     });
     const runtime = new GameRuntime({
       clock,
@@ -74,7 +74,7 @@ describe("GameRuntime", () => {
         speed: 1,
         freezeExpenses: false,
         autosaveEnabled: true,
-        autosaveIntervalSeconds: 10,
+        autosaveIntervalSeconds: 60,
       }),
       setState: vi.fn(),
       autosave,
@@ -83,7 +83,7 @@ describe("GameRuntime", () => {
       },
     });
     runtime.start();
-    clock.value += 10_000;
+    clock.value += 60_000;
     await runtime.tick();
     expect(autosave).toHaveBeenCalledOnce();
     const failing = new GameRuntime({
@@ -95,7 +95,7 @@ describe("GameRuntime", () => {
         speed: 1,
         freezeExpenses: false,
         autosaveEnabled: true,
-        autosaveIntervalSeconds: 10,
+        autosaveIntervalSeconds: 60,
       }),
       setState: vi.fn(),
       autosave: () => Promise.reject(new Error("disk full")),
@@ -104,9 +104,41 @@ describe("GameRuntime", () => {
       },
     });
     failing.start();
-    clock.value += 10_000;
+    clock.value += 60_000;
     await failing.tick();
     expect(errors[0]).toBeInstanceOf(Error);
+  });
+
+  it("autosaves immediately when a simulation step enters a terminal state", async () => {
+    const clock = new FakeClock();
+    const scheduler = new FakeScheduler();
+    const autosave = vi.fn(async () => Promise.resolve());
+    let state = createInitialState();
+    state.company.cash = -10_000;
+    const runtime = new GameRuntime({
+      clock,
+      scheduler,
+      getSession: () => ({
+        state,
+        paused: false,
+        speed: 1,
+        freezeExpenses: false,
+        autosaveEnabled: true,
+        autosaveIntervalSeconds: 300,
+      }),
+      setState: (next) => {
+        state = next;
+      },
+      autosave,
+      onError: vi.fn(),
+    });
+    runtime.start();
+    clock.value += 1_000;
+    await runtime.tick();
+    expect(state.progression.terminalState).toMatchObject({
+      kind: "bankrupt",
+    });
+    expect(autosave).toHaveBeenCalledOnce();
   });
 });
 

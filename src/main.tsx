@@ -61,7 +61,10 @@ try {
       if (state.gameState === null || state.screen !== "game") return null;
       return {
         state: state.gameState,
-        paused: state.paused || state.pauseMenuOpen,
+        paused:
+          state.paused ||
+          state.pauseMenuOpen ||
+          state.gameState.progression.terminalState !== null,
         speed: state.speed,
         freezeExpenses: state.freezeExpenses,
         autosaveEnabled: state.options.autosaveEnabled,

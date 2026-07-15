@@ -70,6 +70,13 @@ for confirmation. Malformed or unsupported imports show an error and do not
 replace the current slot. If current data becomes invalid while its backup is
 valid, the slot is marked **recoverable** and offers **Restore backup**. Invalid
 records are preserved for diagnostics until you explicitly delete that slot.
+Version-one Phase 2 saves migrate to the terminal-state schema without changing
+their cash. Legacy 10- or 30-second autosave options migrate to one minute, and
+the legacy 60-second option remains one minute.
+
+Autosave choices are 1, 5, 10, 15, and 30 minutes; new installs default to five
+minutes. Successful save and tutorial-complete notices stack in the bottom-right
+and disappear after five seconds. Warnings and errors remain until dismissed.
 
 ## QA panel
 
@@ -85,22 +92,36 @@ The F10 panel is intentionally absent from a normal `npm run build` release.
 
 1. Start with empty browser storage and confirm Continue is disabled.
 2. Change options, refresh, and confirm they remain changed.
-3. Create a company in Slot 1 and confirm the bedroom shows $500, an empty 12U
+3. Create a company in Slot 1 and confirm the bedroom shows $0, an empty 12U
    rack, four inventory items, and Gravy's Garden Blog.
 4. Use Tab, Enter, and Space to select rack units and install every starter item.
-5. Accept the tutorial contract and confirm cash, gross income, net income,
+   Confirm the tutorial cannot be accepted before its requirements are ready.
+5. Drag an inventory item onto the rack, move an installed item, press Escape to
+   cancel a drag, and drop installed equipment on the inventory return zone.
+   Confirm IDs, position, and power state remain correct.
+6. Accept the tutorial contract and confirm cash, gross income, net income,
    fulfillment, actual revenue, and time remaining change.
-6. Complete the tutorial in the QA build and confirm the store and three market
-   offers unlock.
-7. Buy an affordable item and confirm both cash and inventory change together.
-8. Pause, save, return to the menu, refresh, and Continue. Confirm rack progress
-   returns.
-9. Create a second slot, delete only that slot, and confirm Slot 1 remains.
-10. Export a valid slot, import it elsewhere, and then try malformed JSON. Confirm
+7. Confirm electricity remains waived during the tutorial. Complete it in the
+   QA build and confirm the store, three market offers, and normal electricity
+   expense unlock.
+8. Consume part of the SLA buffer, restore healthy service, and confirm the
+   remaining buffer recovers at the displayed rate.
+9. Trigger tutorial failure in QA, save, refresh, and Continue. Confirm the
+   tutorial game-over screen returns and its delete/start-over action identifies
+   the affected slot.
+10. Test debt at -$9,999.99 and confirm play continues with a warning. Test
+    exactly -$10,000 and below and confirm the bankruptcy screen persists.
+11. Buy an affordable item and confirm both cash and inventory change together.
+12. Pause, save, return to the menu, refresh, and Continue. Confirm rack progress
+    returns.
+13. Create a second slot, delete only that slot, and confirm Slot 1 remains.
+14. Export a valid slot, import it elsewhere, and then try malformed JSON. Confirm
     the malformed file does not replace the existing company.
-11. At 390x844, confirm the save manager and options can be used without
+15. Preview compact and large interface scale, leave without saving to confirm
+    reversion, then save and refresh to confirm persistence.
+16. At 390x844, confirm the save manager and options can be used without
     horizontal scrolling. Rack editing may remain desktop-oriented.
-12. At 1280x720, 1440x900, and 1920x1080, inspect the menu, facility, contracts,
+17. At 1280x720, 1440x900, and 1920x1080, inspect the menu, facility, contracts,
     store, pause menu, error fallback, and QA panel for clipping and overlap.
 
 ## Known Phase 2 limits
