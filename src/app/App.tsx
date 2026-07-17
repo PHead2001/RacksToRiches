@@ -3,7 +3,9 @@ import {
   Suspense,
   useEffect,
   useMemo,
+  useRef,
   useState,
+  type CSSProperties,
   type ChangeEvent,
   type ReactNode,
 } from "react";
@@ -12,6 +14,7 @@ import {
   DragOverlay,
   KeyboardSensor,
   PointerSensor,
+  rectIntersection,
   TouchSensor,
   pointerWithin,
   useDraggable,
@@ -24,14 +27,22 @@ import {
 } from "@dnd-kit/core";
 
 import {
+  calculateResaleProceeds,
   calculateContractReadiness,
+  calculateServicePoolProjection,
   calculateSlaBuffer,
   getEquipmentDefinition,
   getUnlockedBedroomEquipment,
+  STARTER_EQUIPMENT_INSTANCE_IDS,
   TUTORIAL_MILESTONE_ID,
   VIOLATION_RECOVERY_RATE,
 } from "../game";
-import type { ContractInstance, GameState } from "../game";
+import type {
+  CONSUMABLE_RESOURCE_KEYS,
+  ContractInstance,
+  EquipmentPlacement,
+  GameState,
+} from "../game";
 import { SAVE_SLOT_IDS, webCapabilities } from "../platform";
 import type { AppOptions, SaveSlotId, SaveSlotSummary } from "../platform";
 import type { GameRuntime } from "../runtime";
@@ -51,6 +62,7 @@ import { useAppStore } from "./storeContext";
 const DevelopmentPanel = __DEV_TOOLS__
   ? lazy(() => import("../dev/DevelopmentPanel"))
   : null;
+let suppressPauseForDragCancellation = false;
 
 export function App({ runtime }: { runtime: GameRuntime }) {
   const screen = useAppStore((state) => state.screen);
@@ -60,9 +72,9 @@ export function App({ runtime }: { runtime: GameRuntime }) {
   const boot = useAppStore((state) => state.boot);
   const saveNow = useAppStore((state) => state.saveNow);
   const togglePauseMenu = useAppStore((state) => state.togglePauseMenu);
-  const dragActive = useAppStore((state) => state.dragActive);
   const recordError = useAppStore((state) => state.recordError);
   const [developmentOpen, setDevelopmentOpen] = useState(false);
+  const dragGestureActive = useRef(false);
 
   useEffect(() => {
     void boot();
@@ -76,11 +88,32 @@ export function App({ runtime }: { runtime: GameRuntime }) {
   }, [runtime]);
 
   useEffect(() => {
+    const onPointerDown = (event: PointerEvent) => {
+      if (
+        event.target instanceof Element &&
+        event.target.closest(".drag-handle, .rack-equipment-face") !== null
+      ) {
+        dragGestureActive.current = true;
+      }
+    };
+    const onPointerUp = () => {
+      dragGestureActive.current = false;
+    };
     const onKeyDown = (event: KeyboardEvent) => {
       if (
         event.key === "Escape" &&
+        (suppressPauseForDragCancellation ||
+          dragGestureActive.current ||
+          document.querySelector(".drag-overlay") !== null)
+      ) {
+        dragGestureActive.current = false;
+        event.preventDefault();
+        return;
+      }
+      if (
+        event.key === "Escape" &&
         screen === "game" &&
-        !dragActive &&
+        !event.defaultPrevented &&
         gameState?.progression.terminalState === null
       )
         togglePauseMenu();
@@ -89,11 +122,15 @@ export function App({ runtime }: { runtime: GameRuntime }) {
         setDevelopmentOpen((open) => !open);
       }
     };
-    window.addEventListener("keydown", onKeyDown);
+    window.addEventListener("pointerdown", onPointerDown, true);
+    window.addEventListener("pointerup", onPointerUp, true);
+    window.addEventListener("keydown", onKeyDown, true);
     return () => {
-      window.removeEventListener("keydown", onKeyDown);
+      window.removeEventListener("pointerdown", onPointerDown, true);
+      window.removeEventListener("pointerup", onPointerUp, true);
+      window.removeEventListener("keydown", onKeyDown, true);
     };
-  }, [dragActive, gameState, screen, togglePauseMenu]);
+  }, [gameState, screen, togglePauseMenu]);
 
   useEffect(() => {
     const onError = (event: ErrorEvent) => {
@@ -758,11 +795,15 @@ function GameShell({ state }: { state: GameState }) {
           </button>
           <button
             className={view === "contracts" ? "active" : ""}
+            aria-label={`Contracts, ${String(state.contracts.offers.length)} ${state.contracts.offers.length === 1 ? "offer" : "offers"} available`}
             onClick={() => {
               setView("contracts");
             }}
           >
-            Contracts <span>{state.contracts.offers.length}</span>
+            <span className="nav-label">Contracts</span>
+            <span className="nav-count" aria-hidden="true">
+              {state.contracts.offers.length}
+            </span>
           </button>
           <button
             className={view === "store" ? "active" : ""}
@@ -827,6 +868,7 @@ function FacilityView({ state }: { state: GameState }) {
   const install = useAppStore((store) => store.installEquipment);
   const move = useAppStore((store) => store.moveInstalledEquipment);
   const remove = useAppStore((store) => store.removeInstalledEquipment);
+  const sell = useAppStore((store) => store.sellInventoryEquipment);
   const toggle = useAppStore((store) => store.toggleEquipment);
   const previewRelocation = useAppStore(
     (store) => store.previewEquipmentRelocation,
@@ -855,6 +897,9 @@ function FacilityView({ state }: { state: GameState }) {
     [setDragActive],
   );
   const metrics = useMemo(() => selectGameMetrics(state), [state]);
+  const tutorialComplete = state.progression.completedMilestones.includes(
+    TUTORIAL_MILESTONE_ID,
+  );
   const rack = state.facilities[0]?.racks[0];
   if (rack === undefined) throw new Error("Starter rack is missing");
 
@@ -884,6 +929,7 @@ function FacilityView({ state }: { state: GameState }) {
     setDragFeedback(null);
   };
   const cancelDrag = () => {
+    suppressPauseForDragCancellation = true;
     setDraggedEquipmentId(null);
     setPreviewUnits([]);
     setDragFeedback(null);
@@ -891,6 +937,7 @@ function FacilityView({ state }: { state: GameState }) {
     // Keep this flag set through the current keyboard event so Escape cancels
     // the drag without also opening the pause menu.
     window.setTimeout(() => {
+      suppressPauseForDragCancellation = false;
       setDragActive(false);
     }, 0);
   };
@@ -994,8 +1041,14 @@ function FacilityView({ state }: { state: GameState }) {
 
   return (
     <DndContext
+      autoScroll={false}
       sensors={sensors}
-      collisionDetection={pointerWithin}
+      collisionDetection={(arguments_) => {
+        const pointerCollisions = pointerWithin(arguments_);
+        return pointerCollisions.length > 0
+          ? pointerCollisions
+          : rectIntersection(arguments_);
+      }}
       onDragStart={onDragStart}
       onDragOver={onDragOver}
       onDragEnd={onDragEnd}
@@ -1041,7 +1094,6 @@ function FacilityView({ state }: { state: GameState }) {
             {Array.from({ length: 12 }, (_, index) => 11 - index).map(
               (unit) => {
                 const equipment = occupying(unit);
-                const firstUnit = equipment?.startUnit === unit;
                 return (
                   <RackUnitButton
                     key={unit}
@@ -1055,18 +1107,16 @@ function FacilityView({ state }: { state: GameState }) {
                     <span className="unit-number">{String(unit + 1)}U</span>
                     {equipment === undefined ? (
                       <em>AVAILABLE</em>
-                    ) : firstUnit ? (
-                      <strong>{equipmentLabel(equipment.definitionId)}</strong>
                     ) : (
-                      <span className="continuation">┄</span>
-                    )}
-                    {equipment !== undefined && (
-                      <i className={equipment.poweredOn ? "led on" : "led"} />
+                      <em>RESERVED</em>
                     )}
                   </RackUnitButton>
                 );
               },
             )}
+            {rack.equipment.map((equipment) => (
+              <RackEquipmentFace key={equipment.id} equipment={equipment} />
+            ))}
           </div>
         </section>
         <aside className="facility-side">
@@ -1085,9 +1135,17 @@ function FacilityView({ state }: { state: GameState }) {
                 Nothing waiting on the floor. Miraculous.
               </p>
             )}
-            <div className="inventory-list">
+            <div
+              className="inventory-list bounded-list"
+              role="region"
+              aria-label="Inventory equipment"
+            >
               {state.inventory.map((item) => {
                 const definition = getEquipmentDefinition(item.definitionId);
+                const resale = calculateResaleProceeds(item.acquisitionPrice);
+                const tutorialLocked =
+                  !tutorialComplete &&
+                  STARTER_EQUIPMENT_INSTANCE_IDS.some((id) => id === item.id);
                 return (
                   <article key={item.id}>
                     <div>
@@ -1095,6 +1153,7 @@ function FacilityView({ state }: { state: GameState }) {
                       <small>
                         {definition.category} · {String(definition.rackUnits)}U
                       </small>
+                      <small>Resale {formatMoney(resale, false)}</small>
                     </div>
                     <EquipmentDragHandle
                       equipmentId={item.id}
@@ -1102,6 +1161,31 @@ function FacilityView({ state }: { state: GameState }) {
                     />
                     <button onClick={() => install(item.id, selectedUnit)}>
                       Install at {String(selectedUnit + 1)}U
+                    </button>
+                    <button
+                      disabled={tutorialLocked || resale === 0}
+                      title={
+                        tutorialLocked
+                          ? "Required for the first contract"
+                          : resale === 0
+                            ? "No resale value"
+                            : undefined
+                      }
+                      onClick={() => {
+                        if (
+                          window.confirm(
+                            `Sell ${definition.name} for ${formatMoney(resale, false)}?`,
+                          )
+                        ) {
+                          sell(item.id);
+                        }
+                      }}
+                    >
+                      {tutorialLocked
+                        ? "Required for tutorial"
+                        : resale === 0
+                          ? "No resale value"
+                          : `Sell for ${formatMoney(resale, false)}`}
                     </button>
                   </article>
                 );
@@ -1182,30 +1266,29 @@ function FacilityView({ state }: { state: GameState }) {
             >
               Drop installed equipment here to return it to inventory.
             </div>
-            {rack.equipment.map((equipment) => (
-              <article key={equipment.id}>
-                <strong>{equipmentLabel(equipment.definitionId)}</strong>
-                <small>
-                  {String(equipment.startUnit + 1)}U ·{" "}
-                  {equipment.poweredOn ? "Powered" : "Offline"}
-                </small>
-                <div className="button-row compact-row">
-                  <EquipmentDragHandle
-                    equipmentId={equipment.id}
-                    label={`Drag ${equipmentLabel(equipment.definitionId)}`}
-                  />
-                  <button
-                    onClick={() => toggle(equipment.id, !equipment.poweredOn)}
-                  >
-                    {equipment.poweredOn ? "Power off" : "Power on"}
-                  </button>
-                  <button onClick={() => move(equipment.id, selectedUnit)}>
-                    Move
-                  </button>
-                  <button onClick={() => remove(equipment.id)}>Remove</button>
-                </div>
-              </article>
-            ))}
+            <div
+              className="installed-list bounded-list"
+              role="region"
+              aria-label="Installed equipment controls"
+            >
+              {rack.equipment.map((equipment) => (
+                <article key={equipment.id}>
+                  <strong>{equipmentLabel(equipment.definitionId)}</strong>
+                  <small>
+                    {String(equipment.startUnit + 1)}U ·{" "}
+                    {equipment.poweredOn ? "Powered" : "Offline"}
+                  </small>
+                  <div className="button-row compact-row">
+                    <button
+                      onClick={() => toggle(equipment.id, !equipment.poweredOn)}
+                    >
+                      {equipment.poweredOn ? "Power off" : "Power on"}
+                    </button>
+                    <button onClick={() => remove(equipment.id)}>Remove</button>
+                  </div>
+                </article>
+              ))}
+            </div>
           </section>
           <p className="drag-feedback" aria-live="polite">
             {dragFeedback}
@@ -1244,10 +1327,40 @@ function RackUnitButton({
     <button
       ref={setNodeRef}
       className={`${className} ${isOver ? "drop-anchor" : ""}`}
+      style={{ gridColumn: 1, gridRow: String(12 - unit) }}
       onClick={onClick}
       aria-label={ariaLabel}
     >
       {children}
+    </button>
+  );
+}
+
+function RackEquipmentFace({ equipment }: { equipment: EquipmentPlacement }) {
+  const definition = getEquipmentDefinition(equipment.definitionId);
+  const { setNodeRef, listeners, attributes, isDragging } = useDraggable({
+    id: `equipment:${equipment.id}`,
+  });
+  const style: CSSProperties = {
+    gridColumn: 1,
+    gridRow: `${String(12 - (equipment.startUnit + definition.rackUnits - 1))} / span ${String(definition.rackUnits)}`,
+  };
+  return (
+    <button
+      ref={setNodeRef}
+      className={`rack-equipment-face ${isDragging ? "dragging" : ""}`}
+      style={style}
+      type="button"
+      aria-label={`Move ${definition.name}, ${String(definition.rackUnits)} rack units, ${equipment.poweredOn ? "powered" : "offline"}`}
+      {...listeners}
+      {...attributes}
+    >
+      <span className="rack-grip" aria-hidden="true">
+        GRIP
+      </span>
+      <strong>{definition.name}</strong>
+      <small>{String(definition.rackUnits)}U</small>
+      <i className={equipment.poweredOn ? "led on" : "led"} />
     </button>
   );
 }
@@ -1293,6 +1406,15 @@ function Metric({
   );
 }
 
+function resourceLabel(key: (typeof CONSUMABLE_RESOURCE_KEYS)[number]): string {
+  if (key === "gpuCompute") return "GPU compute";
+  return key.charAt(0).toUpperCase() + key.slice(1);
+}
+
+function formatCapacity(value: number): string {
+  return Number.isInteger(value) ? String(value) : value.toFixed(1);
+}
+
 function ContractsView({ state }: { state: GameState }) {
   const accept = useAppStore((store) => store.acceptOffer);
   const reject = useAppStore((store) => store.rejectOffer);
@@ -1300,9 +1422,37 @@ function ContractsView({ state }: { state: GameState }) {
   const tutorialComplete = state.progression.completedMilestones.includes(
     TUTORIAL_MILESTONE_ID,
   );
+  const servicePool = calculateServicePoolProjection(
+    metrics.capacity,
+    state.contracts.active,
+    "rack-starter-1",
+  );
 
   return (
     <div className="contracts-layout">
+      <section
+        className="panel service-pool-summary"
+        aria-labelledby="service-pool-title"
+      >
+        <div className="section-heading">
+          <div>
+            <p className="eyebrow">SHARED SERVICE POOL</p>
+            <h2 id="service-pool-title">Capacity after active reservations</h2>
+          </div>
+        </div>
+        <dl>
+          {servicePool.resources.map((resource) => (
+            <div key={resource.key}>
+              <dt>{resourceLabel(resource.key)}</dt>
+              <dd>
+                {formatCapacity(resource.used)} used /{" "}
+                {formatCapacity(resource.total)} total /{" "}
+                {formatCapacity(resource.remaining)} remaining
+              </dd>
+            </div>
+          ))}
+        </dl>
+      </section>
       <section>
         <div className="page-title">
           <div>
@@ -1319,6 +1469,7 @@ function ContractsView({ state }: { state: GameState }) {
               key={contract.id}
               contract={contract}
               capacity={metrics.capacity}
+              activeContracts={state.contracts.active}
               performance={null}
               onAccept={() => accept(contract.id)}
               onReject={() => reject(contract.id)}
@@ -1345,6 +1496,7 @@ function ContractsView({ state }: { state: GameState }) {
               key={contract.id}
               contract={contract}
               capacity={metrics.capacity}
+              activeContracts={state.contracts.active}
               performance={metrics.performance.get(contract.id) ?? 0}
             />
           ))}
@@ -1364,18 +1516,25 @@ function ContractsView({ state }: { state: GameState }) {
 function ContractCard({
   contract,
   capacity,
+  activeContracts,
   performance,
   onAccept,
   onReject,
 }: {
   contract: ContractInstance;
   capacity: ReturnType<typeof selectGameMetrics>["capacity"];
+  activeContracts: readonly ContractInstance[];
   performance: number | null;
   onAccept?: (() => void) | undefined;
   onReject?: (() => void) | undefined;
 }) {
   const resources = selectResourceFulfillment(capacity, contract);
-  const readiness = calculateContractReadiness(contract, capacity);
+  const readiness = calculateContractReadiness(
+    contract,
+    capacity,
+    activeContracts,
+    "rack-starter-1",
+  );
   const sla = calculateSlaBuffer({
     ...contract,
     performanceScore: performance ?? readiness.fulfillment,
@@ -1405,6 +1564,41 @@ function ContractCard({
           </div>
         ))}
       </div>
+      {performance === null && (
+        <div
+          className="offer-projection"
+          aria-label="Projected service-pool capacity"
+        >
+          {readiness.projection.resources
+            .filter((resource) => resource.candidateRequired > 0)
+            .map((resource) => (
+              <div key={resource.key}>
+                <strong>{resourceLabel(resource.key)}</strong>
+                <span>
+                  {formatCapacity(resource.candidateRequired)} required
+                </span>
+                <span>
+                  {formatCapacity(resource.remaining)} remaining before
+                  acceptance
+                </span>
+                {resource.shortfall > 0 ? (
+                  <span className="shortfall">
+                    {formatCapacity(resource.shortfall)} short
+                  </span>
+                ) : (
+                  <span>
+                    {formatCapacity(resource.projectedRemaining)} remaining
+                    after acceptance
+                  </span>
+                )}
+              </div>
+            ))}
+          <p>
+            Projected aggregate fulfillment:{" "}
+            {(readiness.fulfillment * 100).toFixed(1)}%
+          </p>
+        </div>
+      )}
       <dl className="contract-economics">
         <div>
           <dt>Base revenue</dt>
@@ -1445,10 +1639,16 @@ function ContractCard({
         )}
       </dl>
       <p className="sla-explanation">
-        Time below 100% fulfillment consumes this buffer. Healthy service
-        recovers it at {String(VIOLATION_RECOVERY_RATE)} seconds per second;
-        exhausting it breaches the contract.
+        This buffer is based on contract duration. Time below 100% fulfillment
+        consumes it. Healthy service recovers it at{" "}
+        {String(VIOLATION_RECOVERY_RATE)} seconds per second; exhausting it
+        breaches the contract.
       </p>
+      {performance !== null && activeContracts.length > 1 && (
+        <p className="pool-note">
+          Fulfillment is shared across this rack's active service pool.
+        </p>
+      )}
       <p className="readiness-explanation">{readiness.explanation}</p>
       {onAccept !== undefined && (
         <div className="button-row">
@@ -1681,7 +1881,6 @@ export function NotificationStack() {
 function NotificationItem({ notification }: { notification: AppNotification }) {
   const dismiss = useAppStore((state) => state.dismissNotification);
   useEffect(() => {
-    if (notification.durationMilliseconds === null) return;
     const handle = window.setTimeout(() => {
       dismiss(notification.id);
     }, notification.durationMilliseconds);

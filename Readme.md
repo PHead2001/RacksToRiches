@@ -1937,9 +1937,10 @@ save writes use isolated temporary, current, backup, and preserved-corrupt
 records. Import validation occurs before any current data is replaced. Invalid
 or unsupported data is never silently reset or deleted.
 
-Routine saves and tutorial completion use dismissible bottom-right typed
-notifications that expire after five seconds. Actionable warnings and errors
-remain until dismissed. Repeated autosaves replace the prior save notification.
+All bottom-right typed notifications expire automatically. Success and
+information notices last five seconds; warnings and errors last eight seconds
+and remain recorded in bounded diagnostics after their toast disappears.
+Repeated autosaves replace the prior save notification and reset its timer.
 
 Global options are stored separately from game slots. Phase 2 options are fixed
 UI scale, reduced motion, compact or expanded number formatting, autosave,
@@ -1956,19 +1957,24 @@ The playable slice begins in the bedroom with the Phase 1 starter rack, four
 inventory items, zero cash, and Gravy's Garden Blog offer. Electricity expense
 is explicitly waived by the pure simulation until the tutorial completes or
 fails. The Facility screen provides a keyboard- and click-operable 12U grid,
-pointer and touch drag interactions, inventory installation, installed-item
-move and removal controls, power toggles, live capacity telemetry, and explicit
+pointer and touch drag interactions, inventory installation, direct rack-face
+movement, removal controls, power toggles, live capacity telemetry, and explicit
 power or cooling throttling warnings. Rack-unit selection is an anchor: large
 items clamp naturally at rack edges, choose the nearest valid span, and
 deterministically reflow existing hardware when necessary. Click, keyboard, and
 drag interactions all commit through the same typed pure layout command.
+Installed rack faces are the only drag and keyboard-move handles. Inventory and
+Installed Controls scroll independently within bounded panels, including the
+full-rack and 30-item QA stress states.
 
 The tutorial offer can be accepted and assigned to the starter rack and remains
 recoverable until acceptance. The Contracts screen shows requirements,
 per-resource fulfillment, duration, revenue multiplier output, actual revenue,
 SLA state, total and remaining SLA buffer, and remaining time. Time below 100%
 fulfillment consumes the buffer, while healthy service recovers it at the
-centralized recovery rate. Readiness labels distinguish missing hardware from
+centralized recovery rate. SLA buffer seconds use one duration-based rule:
+`clamp(round(total duration × 0.10), 5, 45)`. The 30-second tutorial therefore
+has a five-second buffer. Readiness labels distinguish missing hardware from
 an actual capacity shortfall. Completion grants the centralized tutorial
 reputation reward, records the tutorial milestone, unlocks the bedroom hardware
 store, and fills three deterministic Bedroom Host marketplace slots. Accepting,
@@ -1976,10 +1982,21 @@ rejecting, or expiring a starter offer deterministically refills its slot from
 the saved RNG state. Negotiation, renewal, growth, rack groups, and enterprise
 contracts are not Phase 2 systems.
 
+The Contracts screen reports total, active-demand reservations, remaining
+consumable capacity, projected post-acceptance capacity, aggregate fulfillment,
+and exact shortages. Compute, GPU compute, storage, and bandwidth are consumed;
+reliability and security are capability checks. The pure accept command refuses
+offers whose projected aggregate fulfillment is below 100% using the shared
+readiness epsilon.
+
 The Hardware Store lists currently unlocked bedroom-compatible Phase 1
 equipment with price, rack size, output, power, heat, reliability, and category.
 Purchases update cash and inventory atomically through a pure typed command.
-Selling and scrapping are not available in this phase.
+Each instance records its acquisition price. Inventory equipment can be sold
+atomically for half that price, rounded to cents. Starter items record $0,
+remain sale-locked until the tutorial completes, and then have no resale value.
+Installed equipment must return to inventory before sale. Scrapping is not
+available in this phase.
 
 Runtime coordination belongs outside `src/game/**`. One runtime owner advances
 elapsed browser time, avoids duplicate Strict Mode tick loops, supports autosave
@@ -2007,8 +2024,14 @@ and returns to the game-over screen after reload. Debt remains playable below
 $0. Cash-based failure occurs only at the centralized bankruptcy threshold of
 -$10,000. Crossing that threshold preserves the exact cash value, persists the
 terminal state, stops normal simulation, and offers return, export, and
-confirmed delete/start-over actions. Existing version-one saves migrate to the
-new terminal-state schema without changing their recorded cash.
+confirmed delete/start-over actions. Existing version-one saves migrate through
+version two to save version three. Version-two tutorials preserve active
+completion percentage and consumed SLA percentage while moving to the
+30-second duration and duration-derived buffer. Completed and terminal
+tutorials remain complete or terminal. Known starter instances infer a $0
+acquisition price; other version-two instances infer the equipment purchase
+cost because Phase 2 had no discounts. IDs, locations, power states, and cash
+are preserved.
 
 The placeholder interface is desktop-first and cyber-industrial, with semantic
 controls, visible keyboard focus, reduced-motion support, responsive save and
@@ -2101,7 +2124,7 @@ Revenue:
 $2 per second
 
 Duration:
-180 seconds
+30 seconds
 ```
 
 The player installs the equipment, assigns the contract, and begins earning revenue.

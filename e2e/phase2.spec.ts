@@ -17,7 +17,9 @@ async function createGame(page: Page, company = "Foxglove Hosting", slot = 1) {
   await page.getByLabel("Company name").fill(company);
   await page.getByLabel(new RegExp(`Slot ${String(slot)}`)).check();
   await page.getByRole("button", { name: "Initialize company" }).click();
-  await expect(page.getByRole("heading", { name: "Bedroom" })).toBeVisible();
+  await expect(
+    page.getByRole("heading", { name: /Bedroom|Starter 12U/ }).first(),
+  ).toBeVisible();
 }
 
 async function returnToMenu(page: Page) {
@@ -182,6 +184,8 @@ test("new game exposes the starting facility, inventory, and tutorial", async ({
     page.getByRole("heading", { name: "Gravy's Garden Blog" }),
   ).toBeVisible();
   await expect(page.getByText("INSTALL HARDWARE")).toBeVisible();
+  await expect(page.getByText("0:30")).toBeVisible();
+  await expect(page.getByText("0:05 / 0:05")).toBeVisible();
   await expect(
     page.getByRole("button", { name: "Accept & assign to Rack A-01" }),
   ).toBeDisabled();
@@ -224,7 +228,7 @@ test("inventory drag, rack reposition, and drag cancellation are atomic", async 
     "Refurbished Desktop",
   );
   const installedHandle = page.getByRole("button", {
-    name: "Drag Refurbished Desktop",
+    name: /Move Refurbished desktop server, 4 rack units/,
   });
   await pointerDrag(
     page,
@@ -236,20 +240,26 @@ test("inventory drag, rack reposition, and drag cancellation are atomic", async 
   ).toBeVisible();
 
   const cancelHandle = page.getByRole("button", {
-    name: "Drag Refurbished Desktop",
+    name: /Move Refurbished desktop server, 4 rack units/,
   });
   const box = await cancelHandle.boundingBox();
   if (box === null) throw new Error("Drag handle missing");
   await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
   await page.mouse.down();
   await page.mouse.move(box.x - 100, box.y - 100, { steps: 8 });
+  await expect(page.locator(".drag-overlay")).toBeVisible();
   await page.keyboard.press("Escape");
+  await expect(page.getByRole("heading", { name: "Pause menu" })).toHaveCount(
+    0,
+  );
   await page.mouse.up();
   await expect(page.getByRole("heading", { name: "Pause menu" })).toHaveCount(
     0,
   );
   await expect(
-    page.getByRole("button", { name: "Drag Refurbished Desktop" }),
+    page.getByRole("button", {
+      name: /Move Refurbished desktop server, 4 rack units/,
+    }),
   ).toBeVisible();
 });
 
@@ -265,7 +275,9 @@ test("installed equipment can be dragged back to inventory", async ({
     .click();
   await pointerDrag(
     page,
-    page.getByRole("button", { name: "Drag Refurbished Desktop" }),
+    page.getByRole("button", {
+      name: /Move Refurbished desktop server, 4 rack units/,
+    }),
     page.getByLabel("Equipment inventory drop zone"),
   );
   await expect(page.locator(".inventory-list")).toContainText(
@@ -274,6 +286,87 @@ test("installed equipment can be dragged back to inventory", async ({
   await expect(page.locator(".installed-panel")).not.toContainText(
     /Refurbished desktop/i,
   );
+});
+
+test("rack faces provide keyboard movement without duplicate Installed Controls", async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 1920, height: 1080 });
+  await createGame(page, "Keyboard Rack Fox");
+  await page
+    .locator(".inventory-list article")
+    .filter({ hasText: "Refurbished Desktop" })
+    .getByRole("button", { name: /Install at/ })
+    .click();
+  const face = page.getByRole("button", {
+    name: /Move Refurbished desktop server, 4 rack units/,
+  });
+  await face.focus();
+  await page.keyboard.press("Space");
+  await expect(page.locator(".drag-overlay")).toBeVisible();
+  for (let step = 0; step < 12; step += 1) {
+    await page.keyboard.press("ArrowUp");
+  }
+  await page.keyboard.press("Space");
+  await expect(page.locator(".installed-panel")).toContainText(/[2-9]U/);
+  await expect(
+    page.locator(".installed-panel").getByRole("button", { name: /Drag|Move/ }),
+  ).toHaveCount(0);
+  await expectNoA11yViolations(page);
+});
+
+test("mobile Contracts label and count remain separate and readable", async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  await createGame(page, "Mobile Nav Fox");
+  const contracts = page.getByRole("button", {
+    name: "Contracts, 1 offer available",
+  });
+  await expect(contracts.locator(".nav-label")).toHaveText("Contracts");
+  await expect(contracts.locator(".nav-count")).toHaveText("1");
+  const gap = await contracts.evaluate(
+    (element) => getComputedStyle(element).gap,
+  );
+  expect(Number.parseFloat(gap)).toBeGreaterThan(0);
+  expect(
+    await page.evaluate(() => document.documentElement.scrollWidth),
+  ).toBeLessThanOrEqual(390);
+  const navOverflow = await page
+    .locator(".game-nav")
+    .evaluate((element) => element.scrollWidth - element.clientWidth);
+  expect(navOverflow).toBe(0);
+});
+
+test("QA stress scenarios bound equipment lists and show residual capacity", async ({
+  page,
+}) => {
+  await clearStorage(page, "http://127.0.0.1:4174");
+  await page.setViewportSize({ width: 1280, height: 720 });
+  await createGame(page, "Stress Fox");
+  await page.keyboard.press("F10");
+  await page.getByRole("button", { name: "Long equipment lists" }).click();
+  await page.keyboard.press("F10");
+  for (const selector of [".inventory-list", ".installed-list"]) {
+    const region = page.locator(selector);
+    await expect(region).toHaveCSS("overflow-y", "auto");
+    expect(
+      await region.evaluate((element) => element.scrollHeight),
+    ).toBeGreaterThan(await region.evaluate((element) => element.clientHeight));
+  }
+  await page.keyboard.press("F10");
+  await page.getByRole("button", { name: "Residual service pool" }).click();
+  await page.keyboard.press("F10");
+  await page.getByRole("button", { name: /Contracts/ }).click();
+  await expect(
+    page.getByText(/used \/ .* total \/ .* remaining/).first(),
+  ).toBeVisible();
+  await expect(page.getByText("CAPACITY SHORTFALL")).toBeVisible();
+  await expect(page.getByText(/short/).first()).toBeVisible();
+  await expect(
+    page.getByRole("button", { name: "Accept & assign to Rack A-01" }),
+  ).toBeDisabled();
+  await expectNoA11yViolations(page);
 });
 
 test("tutorial failure persists, reloads, and offers confirmed start-over", async ({
@@ -406,11 +499,22 @@ test("corrupt current save offers last-known-good restoration", async ({
 test("QA build exposes F10 tools, undo, completion scenario, and modified saves", async ({
   page,
 }) => {
+  const keyWarnings: string[] = [];
+  page.on("console", (message) => {
+    if (message.type() === "warning" && message.text().includes("key")) {
+      keyWarnings.push(message.text());
+    }
+  });
   await clearStorage(page, "http://127.0.0.1:4174");
   await createGame(page, "QA Fox");
   await page.keyboard.press("F10");
   await expect(page.getByLabel("Development and QA tools")).toBeVisible();
   await page.getByRole("button", { name: "+25 reputation" }).click();
+  await page.getByRole("button", { name: "+25 reputation" }).click();
+  await expect(
+    page.locator(".dev-log").last().getByRole("listitem"),
+  ).toHaveCount(2);
+  expect(keyWarnings).toEqual([]);
   await expect(page.getByText("Modified").locator("..")).toContainText("yes");
   await page.getByRole("button", { name: "Undo latest command" }).click();
   await page.getByRole("button", { name: "Marketplace unlocked" }).click();
@@ -426,6 +530,36 @@ test("QA build exposes F10 tools, undo, completion scenario, and modified saves"
     .click();
   await page.getByRole("button", { name: "Load Game" }).click();
   await expect(page.locator(".save-card").first()).toContainText("QA tools");
+});
+
+test("purchased inventory sells once for half its recorded acquisition price", async ({
+  page,
+}) => {
+  await clearStorage(page, "http://127.0.0.1:4174");
+  await createGame(page, "Resale Fox");
+  await page.keyboard.press("F10");
+  await page.getByRole("button", { name: "Marketplace unlocked" }).click();
+  await page.getByRole("button", { name: "Add cash" }).click();
+  await page.keyboard.press("F10");
+  await page.getByRole("button", { name: "Hardware store" }).click();
+  const listing = page
+    .locator(".store-card")
+    .filter({ hasText: "Used 2U compute server" });
+  await listing.getByRole("button", { name: /Buy/ }).click();
+  await page.getByRole("button", { name: "Facility" }).click();
+  const purchased = page
+    .locator(".inventory-list article")
+    .filter({ hasText: "Used 2U compute server" });
+  await expect(purchased).toContainText("Resale $150.00");
+  page.once("dialog", async (dialog) => {
+    expect(dialog.message()).toContain("$150.00");
+    await dialog.accept();
+  });
+  await purchased.getByRole("button", { name: "Sell for $150.00" }).click();
+  await expect(purchased).toHaveCount(0);
+  await expect(
+    page.locator(".hud-value").filter({ hasText: "Cash" }),
+  ).toContainText("$9.85K");
 });
 
 test("release build has no development panel", async ({ page }) => {

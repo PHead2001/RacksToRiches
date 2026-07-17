@@ -4,6 +4,8 @@ import {
   acceptContract,
   advanceGame,
   assertGameState,
+  calculateAllRackCapacities,
+  calculateSlaBufferSeconds,
   createInitialState,
   evaluateBankruptcy,
   fillStarterMarketplace,
@@ -11,6 +13,7 @@ import {
   purchaseEquipment,
   relocateEquipment,
   rejectContractOffer,
+  sellEquipment,
   setEquipmentPower,
   stampLastSaved,
   TUTORIAL_MILESTONE_ID,
@@ -46,8 +49,15 @@ export interface AppNotification {
   key: string | null;
   type: NotificationType;
   message: string;
-  durationMilliseconds: number | null;
+  durationMilliseconds: number;
 }
+
+const NOTIFICATION_DURATION_MILLISECONDS = {
+  success: 5_000,
+  information: 5_000,
+  warning: 8_000,
+  error: 8_000,
+} as const satisfies Record<NotificationType, number>;
 
 interface NotificationInput {
   key?: string;
@@ -85,8 +95,17 @@ export type DevelopmentCommand =
         | "bankruptcy-at"
         | "bankruptcy-below"
         | "smart-reflow"
+        | "inventory-stress"
+        | "service-pool-stress"
         | "regional-metrics";
     };
+
+interface DevelopmentLogRecord {
+  id: string;
+  timestamp: number;
+  commandType: DevelopmentCommand["type"] | "undo";
+  message: string;
+}
 
 interface AppStoreDependencies {
   saves: SaveRepository;
@@ -113,7 +132,7 @@ export interface AppStoreState {
   freezeExpenses: boolean;
   developmentModified: boolean;
   undoState: GameState | null;
-  developmentLog: readonly string[];
+  developmentLog: readonly DevelopmentLogRecord[];
   errors: readonly AppErrorRecord[];
   boot: () => Promise<void>;
   navigate: (screen: AppScreen) => void;
@@ -143,6 +162,7 @@ export interface AppStoreState {
   ) => ReturnType<typeof relocateEquipment> | null;
   toggleEquipment: (equipmentId: string, poweredOn: boolean) => boolean;
   buyEquipment: (definitionId: string) => boolean;
+  sellInventoryEquipment: (equipmentId: string) => boolean;
   acceptOffer: (contractId: string) => boolean;
   rejectOffer: (contractId: string) => boolean;
   setRuntimeState: (state: GameState) => void;
@@ -266,16 +286,106 @@ function scenarioState(
       ...Array.from({ length: serverCount }, (_, index) => ({
         id: `dev-server-${String(index)}`,
         definitionId: "used-2u-compute",
+        acquisitionPrice: 0,
         startUnit: index * 2,
         poweredOn: true,
       })),
       {
         id: "dev-power",
         definitionId: powerDefinition,
+        acquisitionPrice: 0,
         startUnit: powerStart,
         poweredOn: true,
       },
     ];
+    assertGameState(fresh);
+    return fresh;
+  }
+  if (scenario === "inventory-stress" || scenario === "service-pool-stress") {
+    const rack = fresh.facilities[0]?.racks[0];
+    const template = fresh.contracts.offers[0];
+    if (rack === undefined || template === undefined)
+      throw new Error("Stress scenario fixture is missing");
+    rack.equipment = Array.from({ length: 6 }, (_, index) => ({
+      id: `stress-rack-${String(index)}`,
+      definitionId: "used-2u-compute",
+      acquisitionPrice: 300,
+      startUnit: index * 2,
+      poweredOn: true,
+    }));
+    if (scenario === "inventory-stress") {
+      fresh.inventory = Array.from({ length: 30 }, (_, index) => ({
+        id: `stress-inventory-${String(index)}`,
+        definitionId: "consumer-router",
+        acquisitionPrice: 45,
+      }));
+      assertGameState(fresh);
+      return fresh;
+    }
+    rack.equipment = [
+      ...Array.from({ length: 5 }, (_, index) => ({
+        id: `stress-rack-${String(index)}`,
+        definitionId: "used-2u-compute",
+        acquisitionPrice: 300,
+        startUnit: index * 2,
+        poweredOn: true,
+      })),
+      {
+        id: "stress-power",
+        definitionId: "power-strip",
+        acquisitionPrice: 35,
+        startUnit: 10,
+        poweredOn: true,
+      },
+      {
+        id: "stress-cooling",
+        definitionId: "desk-fan",
+        acquisitionPrice: 25,
+        startUnit: 11,
+        poweredOn: true,
+      },
+    ];
+    const capacity = calculateAllRackCapacities(fresh).get("rack-starter-1");
+    if (capacity === undefined)
+      throw new Error("Stress rack capacity is missing");
+    const duration = 300;
+    const common = {
+      ...template,
+      totalDurationSeconds: duration,
+      remainingSeconds: duration,
+      customerTolerance: calculateSlaBufferSeconds(duration),
+      violationSeconds: 0,
+      performanceScore: 1,
+    };
+    fresh.progression.completedMilestones = [TUTORIAL_MILESTONE_ID];
+    fresh.contracts = {
+      ...fresh.contracts,
+      active: [
+        {
+          ...common,
+          id: "stress-active-a",
+          status: "active",
+          assignedTargetId: "rack-starter-1",
+          requirements: { compute: capacity.compute * 0.4 },
+        },
+        {
+          ...common,
+          id: "stress-active-b",
+          status: "active",
+          assignedTargetId: "rack-starter-1",
+          requirements: { compute: capacity.compute * 0.4 },
+        },
+      ],
+      offers: [
+        {
+          ...common,
+          id: "stress-offer",
+          status: "offered",
+          assignedTargetId: undefined,
+          requirements: { compute: capacity.compute * 0.3 },
+        },
+      ],
+    };
     assertGameState(fresh);
     return fresh;
   }
@@ -305,6 +415,7 @@ export function createGameStore(
 ): StoreApi<AppStoreState> {
   const errorLog = new BoundedErrorLog(dependencies.clock, 30);
   let notificationSequence = 0;
+  let developmentLogSequence = 0;
 
   return createStore<AppStoreState>()((set, get) => {
     const pushNotification = (input: NotificationInput): void => {
@@ -314,7 +425,9 @@ export function createGameStore(
         key: input.key ?? null,
         type: input.type,
         message: input.message,
-        durationMilliseconds: input.durationMilliseconds ?? null,
+        durationMilliseconds:
+          input.durationMilliseconds ??
+          NOTIFICATION_DURATION_MILLISECONDS[input.type],
       };
       set((state) => ({
         notifications: [
@@ -788,6 +901,12 @@ export function createGameStore(
           ? false
           : applyResult(purchaseEquipment(state, definitionId));
       },
+      sellInventoryEquipment: (equipmentId) => {
+        const state = get().gameState;
+        return state === null
+          ? false
+          : applyResult(sellEquipment(state, equipmentId));
+      },
       acceptOffer: (contractId) => {
         const state = get().gameState;
         return state === null
@@ -1008,7 +1127,14 @@ export function createGameStore(
           get().recordError(error, "command");
           return false;
         }
-        const entry = `${command.type} applied at ${new Date(dependencies.clock.now()).toLocaleTimeString()}`;
+        const timestamp = dependencies.clock.now();
+        developmentLogSequence += 1;
+        const entry: DevelopmentLogRecord = {
+          id: `development-log-${String(developmentLogSequence)}`,
+          timestamp,
+          commandType: command.type,
+          message: `${command.type} applied at ${new Date(timestamp).toLocaleTimeString()}`,
+        };
         set({
           gameState: next,
           undoState: state,
@@ -1033,9 +1159,7 @@ export function createGameStore(
         if (command.type === "scenario") {
           set({
             pauseMenuOpen: false,
-            notifications: get().notifications.filter(
-              ({ durationMilliseconds }) => durationMilliseconds === null,
-            ),
+            notifications: [],
           });
         }
         if (
@@ -1050,14 +1174,19 @@ export function createGameStore(
       undoDevelopmentCommand: () => {
         const undoState = get().undoState;
         if (undoState === null) return false;
+        const timestamp = dependencies.clock.now();
+        developmentLogSequence += 1;
+        const undoEntry: DevelopmentLogRecord = {
+          id: `development-log-${String(developmentLogSequence)}`,
+          timestamp,
+          commandType: "undo",
+          message: "Latest development command undone",
+        };
         set({
           gameState: undoState,
           undoState: null,
           developmentModified: true,
-          developmentLog: [
-            ...get().developmentLog,
-            "Latest development command undone",
-          ].slice(-20),
+          developmentLog: [...get().developmentLog, undoEntry].slice(-20),
         });
         return true;
       },

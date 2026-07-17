@@ -622,8 +622,21 @@ h3 {
 }
 .game-nav button {
   display: flex;
+  align-items: center;
+  gap: 0.5rem;
   justify-content: space-between;
   text-align: left;
+}
+.nav-label {
+  white-space: nowrap;
+}
+.nav-count {
+  min-width: 1.55rem;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  padding: 0.05rem 0.35rem;
+  text-align: center;
+  line-height: 1.2;
 }
 .game-nav button.active {
   color: var(--accent);
@@ -724,6 +737,8 @@ h3 {
 }
 .rack-grid {
   display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  grid-template-rows: repeat(12, minmax(2.25rem, auto));
   border: 0.65rem solid #18242a;
   background: #030608;
 }
@@ -761,6 +776,47 @@ h3 {
   font-style: normal;
   letter-spacing: 0.13em;
 }
+.rack-equipment-face {
+  z-index: 3;
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto auto;
+  align-items: center;
+  gap: 0.55rem;
+  min-height: 100%;
+  border: 2px solid var(--cyan);
+  border-radius: 0.2rem;
+  padding: 0.35rem 0.6rem;
+  overflow: hidden;
+  color: var(--text);
+  text-align: left;
+  background: linear-gradient(90deg, #15262c, #0c171b);
+  box-shadow:
+    inset 0 0 0 1px #263b42,
+    0 0 12px rgba(93, 213, 219, 0.14);
+  cursor: grab;
+  touch-action: none;
+}
+.rack-equipment-face:hover,
+.rack-equipment-face:focus-visible {
+  border-color: var(--accent);
+  box-shadow:
+    inset 0 0 0 1px var(--accent-dim),
+    0 0 14px rgba(95, 255, 192, 0.22);
+}
+.rack-equipment-face.dragging {
+  opacity: 0.35;
+  cursor: grabbing;
+}
+.rack-equipment-face strong {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.rack-grip {
+  color: var(--cyan);
+  font-weight: 800;
+  letter-spacing: -0.15rem;
+}
 .led {
   width: 0.55rem;
   height: 0.55rem;
@@ -779,6 +835,17 @@ h3 {
 .inventory-list {
   display: grid;
   gap: 0.55rem;
+}
+.bounded-list {
+  max-height: min(42vh, 28rem);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-gutter: stable;
+  padding-right: 0.3rem;
+}
+.bounded-list:focus-visible {
+  outline: 2px solid var(--cyan);
+  outline-offset: 0.2rem;
 }
 .inventory-list article > div {
   display: flex;
@@ -826,6 +893,9 @@ dd {
   border-top: 1px solid var(--line);
   padding: 0.65rem 0;
 }
+.installed-list {
+  display: grid;
+}
 .installed-panel article {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
@@ -854,6 +924,36 @@ dd {
   display: grid;
   align-content: start;
   gap: 0.8rem;
+}
+.service-pool-summary dl,
+.offer-projection {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(13rem, 1fr));
+  gap: 0.55rem;
+}
+.service-pool-summary dl > div,
+.offer-projection > div {
+  border: 1px solid var(--line);
+  padding: 0.55rem;
+}
+.offer-projection > div {
+  display: grid;
+  gap: 0.2rem;
+}
+.offer-projection span {
+  color: var(--muted);
+  font-size: 0.72rem;
+}
+.offer-projection .shortfall {
+  color: var(--warning);
+  font-weight: 700;
+}
+.offer-projection p,
+.pool-note {
+  grid-column: 1 / -1;
+  margin: 0;
+  color: var(--muted);
+  font-size: 0.75rem;
 }
 .store-card > header {
   justify-content: flex-start;
@@ -1110,10 +1210,23 @@ pre {
     position: sticky;
     top: 0;
     z-index: 8;
-    flex-direction: row;
-    overflow-x: auto;
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 0.35rem;
+    overflow-x: visible;
     border-right: 0;
     border-bottom: 1px solid var(--line);
+    padding: 0.65rem;
+  }
+  .game-nav button {
+    min-width: 0;
+    padding-inline: 0.4rem;
+    font-size: 0.76rem;
+    justify-content: center;
+  }
+  .nav-count {
+    min-width: 1.25rem;
+    padding-inline: 0.25rem;
   }
   .nav-status {
     display: none;

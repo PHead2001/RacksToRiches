@@ -1,4 +1,5 @@
 import { nextRandom, randomInteger } from "./random";
+import { calculateSlaBufferSeconds } from "./contracts";
 import type {
   ContractInstance,
   ContractRequirements,
@@ -49,8 +50,7 @@ export function generateStarterOffer(seed: number): GeneratedOffer {
     CUSTOMER_SUFFIXES.length,
   );
   const durationRoll = integer(suffixRoll.seed, 180, 600);
-  const toleranceRoll = integer(durationRoll.seed, 35, 75);
-  let currentSeed = toleranceRoll.seed;
+  let currentSeed = durationRoll.seed;
   let requirements: ContractRequirements;
   let baseRevenuePerSecond: number;
 
@@ -112,7 +112,7 @@ export function generateStarterOffer(seed: number): GeneratedOffer {
       remainingSeconds: durationRoll.value,
       totalDurationSeconds: durationRoll.value,
       growthPotential: "low",
-      customerTolerance: toleranceRoll.value,
+      customerTolerance: calculateSlaBufferSeconds(durationRoll.value),
       performanceScore: 0,
       violationSeconds: 0,
       autoRenew: false,

@@ -1,7 +1,6 @@
 // @vitest-environment jsdom
 
 import { act, render, screen } from "@testing-library/react";
-import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import type {
@@ -83,20 +82,42 @@ describe("NotificationStack", () => {
     expect(screen.queryByText("Game saved.")).toBeNull();
   });
 
-  it("keeps actionable warnings and allows explicit dismissal", async () => {
-    const user = userEvent.setup();
+  it.each([
+    ["success", 5_000],
+    ["information", 5_000],
+    ["warning", 8_000],
+    ["error", 8_000],
+  ] as const)(
+    "expires %s notifications after %i milliseconds",
+    (type, duration) => {
+      vi.useFakeTimers();
+      const store = setup();
+      act(() => {
+        store.getState().notify({
+          key: type,
+          type,
+          message: `${type} message`,
+        });
+      });
+      expect(screen.getByText(`${type} message`)).toBeTruthy();
+      act(() => {
+        vi.advanceTimersByTime(duration);
+      });
+      expect(screen.queryByText(`${type} message`)).toBeNull();
+    },
+  );
+
+  it("keeps command errors in diagnostics after their toast expires", () => {
+    vi.useFakeTimers();
     const store = setup();
     act(() => {
-      store.getState().notify({
-        key: "warning",
-        type: "warning",
-        message: "Placement needs attention.",
-      });
+      store.getState().recordError(new Error("Storage gremlin"), "storage");
     });
-    expect(screen.getByRole("alert")).toBeTruthy();
-    await user.click(
-      screen.getByRole("button", { name: "Dismiss notification" }),
-    );
-    expect(screen.queryByText("Placement needs attention.")).toBeNull();
+    expect(store.getState().errors).toHaveLength(1);
+    act(() => {
+      vi.advanceTimersByTime(8_000);
+    });
+    expect(screen.queryByText("Storage gremlin")).toBeNull();
+    expect(store.getState().errors[0]?.message).toBe("Storage gremlin");
   });
 });

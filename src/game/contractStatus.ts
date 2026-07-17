@@ -1,16 +1,11 @@
 import { FULFILLMENT_EPSILON } from "./constants";
-import { calculateFulfillment } from "./contracts";
+import {
+  calculateServicePoolProjection,
+  calculateSlaBufferSeconds,
+} from "./contracts";
 import { TUTORIAL_CONTRACT_ID } from "./marketplace";
-import type { ContractInstance, RackCapacity, RequirementKey } from "./types";
-
-const REQUIREMENT_KEYS: readonly RequirementKey[] = [
-  "compute",
-  "gpuCompute",
-  "storage",
-  "bandwidth",
-  "reliability",
-  "security",
-];
+import type { ServicePoolProjection } from "./contracts";
+import type { ContractInstance, RackCapacity } from "./types";
 
 export type ContractReadinessKind =
   | "ready"
@@ -30,6 +25,7 @@ export interface ContractReadiness {
   canAccept: boolean;
   explanation: string;
   fulfillment: number;
+  projection: ServicePoolProjection;
 }
 
 export interface SlaBuffer {
@@ -40,7 +36,7 @@ export interface SlaBuffer {
 }
 
 export function calculateSlaBuffer(contract: ContractInstance): SlaBuffer {
-  const totalSeconds = contract.customerTolerance;
+  const totalSeconds = calculateSlaBufferSeconds(contract.totalDurationSeconds);
   const consumedSeconds = Math.min(
     totalSeconds,
     Math.max(0, contract.violationSeconds),
@@ -63,8 +59,21 @@ export function calculateSlaBuffer(contract: ContractInstance): SlaBuffer {
 export function calculateContractReadiness(
   contract: ContractInstance,
   capacity: RackCapacity,
+  activeContracts: readonly ContractInstance[] = [],
+  targetId = "rack-starter-1",
 ): ContractReadiness {
-  const fulfillment = calculateFulfillment(capacity, contract.requirements);
+  const contractsForProjection =
+    contract.status === "active" &&
+    !activeContracts.some(({ id }) => id === contract.id)
+      ? [...activeContracts, contract]
+      : activeContracts;
+  const projection = calculateServicePoolProjection(
+    capacity,
+    contractsForProjection,
+    targetId,
+    contract.status === "active" ? undefined : contract,
+  );
+  const fulfillment = projection.projectedFulfillment;
   if (contract.status === "active") {
     const healthy = fulfillment >= 1 - FULFILLMENT_EPSILON;
     return healthy
@@ -72,43 +81,51 @@ export function calculateContractReadiness(
           kind: "active",
           label: "ACTIVE",
           canAccept: false,
-          explanation: "The assigned rack currently meets contract demand.",
+          explanation:
+            "The shared rack service pool currently meets aggregate contract demand.",
           fulfillment,
+          projection,
         }
       : {
           kind: "sla-warning",
           label: "SLA WARNING",
           canAccept: false,
-          explanation: "Current rack output is below the contracted demand.",
+          explanation:
+            "The shared rack service pool is below aggregate contracted demand.",
           fulfillment,
+          projection,
         };
   }
 
-  const missing = REQUIREMENT_KEYS.filter((key) => {
-    const required = contract.requirements[key];
-    return (
-      required !== undefined &&
-      required > 0 &&
-      capacity[key] < required - FULFILLMENT_EPSILON
-    );
-  });
-  if (missing.length === 0) {
+  if (projection.safe) {
     return {
       kind: "ready",
       label: "READY",
       canAccept: true,
-      explanation: "The starter rack meets every current requirement.",
+      explanation:
+        activeContracts.length === 0
+          ? "The starter rack meets every current requirement."
+          : "The offer remains fully supported after active contract reservations.",
       fulfillment,
+      projection,
     };
   }
-  const absent = missing.some((key) => capacity[key] <= FULFILLMENT_EPSILON);
+  const absent = projection.limitingResources.some(
+    ({ key }) => capacity[key] <= FULFILLMENT_EPSILON,
+  );
   const isTutorial = contract.id === TUTORIAL_CONTRACT_ID;
-  const label = absent ? "INSTALL HARDWARE" : "CAPACITY SHORTFALL";
+  const installHardware = isTutorial && absent;
+  const shortage = projection.limitingResources
+    .map(({ key, shortfall }) => `${key} +${shortfall.toFixed(2)}`)
+    .join(", ");
   return {
-    kind: absent ? "install-hardware" : "capacity-shortfall",
-    label,
-    canAccept: !isTutorial,
-    explanation: `${isTutorial ? "Install and power the starter hardware" : "Rack output is below this offer"}: ${missing.join(", ")}.`,
+    kind: installHardware ? "install-hardware" : "capacity-shortfall",
+    label: installHardware ? "INSTALL HARDWARE" : "CAPACITY SHORTFALL",
+    canAccept: false,
+    explanation: installHardware
+      ? `Install and power the starter hardware. Missing capacity: ${shortage}.`
+      : `Active contracts have reserved part of this rack. Additional capacity required: ${shortage}.`,
     fulfillment,
+    projection,
   };
 }

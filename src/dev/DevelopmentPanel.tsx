@@ -246,6 +246,16 @@ export default function DevelopmentPanel({ onClose }: { onClose: () => void }) {
                 Smart rack reflow
               </CommandButton>
               <CommandButton
+                command={{ type: "scenario", scenario: "inventory-stress" }}
+              >
+                Long equipment lists
+              </CommandButton>
+              <CommandButton
+                command={{ type: "scenario", scenario: "service-pool-stress" }}
+              >
+                Residual service pool
+              </CommandButton>
+              <CommandButton
                 command={{ type: "scenario", scenario: "regional-metrics" }}
               >
                 Regional UI stress
@@ -309,7 +319,7 @@ export default function DevelopmentPanel({ onClose }: { onClose: () => void }) {
             <h3>Development log</h3>
             <ol className="dev-log">
               {developmentLog.slice(-8).map((entry) => (
-                <li key={entry}>{entry}</li>
+                <li key={entry.id}>{entry.message}</li>
               ))}
             </ol>
           </section>

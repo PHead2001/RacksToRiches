@@ -84,6 +84,31 @@ test("capture required Phase 2 rendered states without horizontal clipping", asy
   await page.keyboard.press("F10");
   await expect(page.getByLabel("Development and QA tools")).toBeVisible();
   await screenshot(page, testInfo, "development-panel-1920x1080");
+  await page.getByRole("button", { name: "Long equipment lists" }).click();
+  await page.keyboard.press("F10");
+  await page.setViewportSize({ width: 1280, height: 720 });
+  await screenshot(page, testInfo, "bounded-equipment-lists-1280x720");
+  await page.keyboard.press("F10");
+  await page.getByRole("button", { name: "Residual service pool" }).click();
+  await page.keyboard.press("F10");
+  await page.getByRole("button", { name: /Contracts/ }).click();
+  await screenshot(page, testInfo, "residual-service-pool-1280x720");
+  await page.setViewportSize({ width: 390, height: 844 });
+  await screenshot(page, testInfo, "mobile-contract-count-390x844");
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await page.getByRole("button", { name: "Facility" }).click();
+  await page
+    .locator(".inventory-list article")
+    .first()
+    .getByRole("button", { name: /Install at/ })
+    .click();
+  await screenshot(page, testInfo, "warning-notification-1440x900");
+  await page.waitForTimeout(8_100);
+  await screenshot(page, testInfo, "warning-expired-1440x900");
+  await page.keyboard.press("F10");
+  await page.getByRole("button", { name: "+25 reputation" }).click();
+  await page.getByRole("button", { name: "+25 reputation" }).click();
+  await screenshot(page, testInfo, "qa-duplicate-command-log-1440x900");
   await page.getByRole("button", { name: "Marketplace unlocked" }).click();
   await page.keyboard.press("F10");
   await page.getByRole("button", { name: "Hardware store" }).click();

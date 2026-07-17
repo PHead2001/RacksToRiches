@@ -6,7 +6,12 @@ import {
 import { assertFiniteNonNegative } from "./errors";
 import { calculateAllRackCapacities } from "./capacity";
 import { calculateContractReadiness } from "./contractStatus";
-import { TUTORIAL_CONTRACT_ID, fillStarterMarketplace } from "./marketplace";
+import { STARTER_EQUIPMENT_INSTANCE_IDS } from "./constants";
+import {
+  TUTORIAL_CONTRACT_ID,
+  TUTORIAL_MILESTONE_ID,
+  fillStarterMarketplace,
+} from "./marketplace";
 import { relocateEquipment } from "./placement";
 import { nextRandom } from "./random";
 import type { GameState } from "./types";
@@ -21,6 +26,9 @@ export type GameCommandErrorCode =
   | "LOCKED"
   | "TUTORIAL_REQUIRED"
   | "REQUIREMENTS_NOT_MET"
+  | "CAPACITY_SHORTFALL"
+  | "NOT_IN_INVENTORY"
+  | "TERMINAL_STATE"
   | "DUPLICATE_INSTANCE";
 
 export type GameCommandResult =
@@ -121,6 +129,9 @@ export function purchaseEquipment(
   state: GameState,
   definitionId: string,
 ): GameCommandResult {
+  if (state.progression.terminalState !== null) {
+    return failure("TERMINAL_STATE", "This company can no longer trade");
+  }
   const definition = EQUIPMENT_DEFINITIONS.find(
     ({ id }) => id === definitionId,
   );
@@ -158,7 +169,57 @@ export function purchaseEquipment(
       ...state.company,
       cash: state.company.cash - definition.purchaseCost,
     },
-    inventory: [...state.inventory, { id, definitionId: definition.id }],
+    inventory: [
+      ...state.inventory,
+      {
+        id,
+        definitionId: definition.id,
+        acquisitionPrice: definition.purchaseCost,
+      },
+    ],
+  });
+}
+
+export function calculateResaleProceeds(acquisitionPrice: number): number {
+  assertFiniteNonNegative(acquisitionPrice, "equipment acquisition price");
+  return Math.round(acquisitionPrice * 0.5 * 100) / 100;
+}
+
+export function sellEquipment(
+  state: GameState,
+  equipmentId: string,
+): GameCommandResult {
+  if (state.progression.terminalState !== null) {
+    return failure("TERMINAL_STATE", "This company can no longer trade");
+  }
+  const item = state.inventory.find(({ id }) => id === equipmentId);
+  if (item === undefined) {
+    return failure(
+      allEquipmentIds(state).includes(equipmentId)
+        ? "NOT_IN_INVENTORY"
+        : "NOT_FOUND",
+      allEquipmentIds(state).includes(equipmentId)
+        ? "Return installed equipment to inventory before selling it"
+        : `Inventory equipment not found: ${equipmentId}`,
+    );
+  }
+  const tutorialComplete = state.progression.completedMilestones.includes(
+    TUTORIAL_MILESTONE_ID,
+  );
+  if (
+    !tutorialComplete &&
+    STARTER_EQUIPMENT_INSTANCE_IDS.some((id) => id === item.id)
+  ) {
+    return failure(
+      "TUTORIAL_REQUIRED",
+      "This starter item is required for Gravy's first contract",
+    );
+  }
+  const proceeds = calculateResaleProceeds(item.acquisitionPrice);
+  return success({
+    ...state,
+    company: { ...state.company, cash: state.company.cash + proceeds },
+    inventory: state.inventory.filter(({ id }) => id !== equipmentId),
   });
 }
 
@@ -167,6 +228,12 @@ export function acceptContract(
   contractId: string,
   rackId: string,
 ): GameCommandResult {
+  if (state.progression.terminalState !== null) {
+    return failure(
+      "TERMINAL_STATE",
+      "This company can no longer accept contracts",
+    );
+  }
   const offer = state.contracts.offers.find(({ id }) => id === contractId);
   if (offer === undefined)
     return failure("NOT_FOUND", `Contract offer not found: ${contractId}`);
@@ -175,15 +242,18 @@ export function acceptContract(
   );
   if (!rackExists)
     return failure("INVALID_TARGET", `Rack not found: ${rackId}`);
-  if (offer.id === TUTORIAL_CONTRACT_ID) {
-    const capacity = calculateAllRackCapacities(state).get(rackId);
-    if (capacity === undefined) {
-      return failure("INVALID_TARGET", `Rack not found: ${rackId}`);
-    }
-    const readiness = calculateContractReadiness(offer, capacity);
-    if (!readiness.canAccept) {
-      return failure("REQUIREMENTS_NOT_MET", readiness.explanation);
-    }
+  const capacity = calculateAllRackCapacities(state).get(rackId);
+  if (capacity === undefined) {
+    return failure("INVALID_TARGET", `Rack not found: ${rackId}`);
+  }
+  const readiness = calculateContractReadiness(
+    offer,
+    capacity,
+    state.contracts.active,
+    rackId,
+  );
+  if (!readiness.canAccept) {
+    return failure("CAPACITY_SHORTFALL", readiness.explanation);
   }
   const next = {
     ...state,

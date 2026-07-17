@@ -70,13 +70,16 @@ for confirmation. Malformed or unsupported imports show an error and do not
 replace the current slot. If current data becomes invalid while its backup is
 valid, the slot is marked **recoverable** and offers **Restore backup**. Invalid
 records are preserved for diagnostics until you explicitly delete that slot.
-Version-one Phase 2 saves migrate to the terminal-state schema without changing
-their cash. Legacy 10- or 30-second autosave options migrate to one minute, and
+Version-one saves migrate through version two to save version three without
+changing cash. Version-two active tutorials preserve completion and consumed
+SLA-buffer percentages while moving to the 30-second tutorial. Starter
+equipment infers a $0 acquisition price; other old equipment infers its Phase 2
+definition price. Legacy 10- or 30-second autosave options migrate to one minute, and
 the legacy 60-second option remains one minute.
 
 Autosave choices are 1, 5, 10, 15, and 30 minutes; new installs default to five
-minutes. Successful save and tutorial-complete notices stack in the bottom-right
-and disappear after five seconds. Warnings and errors remain until dismissed.
+minutes. Success and information notices disappear after five seconds; warning
+and error toasts disappear after eight seconds while diagnostics retain errors.
 
 ## QA panel
 
@@ -96,11 +99,13 @@ The F10 panel is intentionally absent from a normal `npm run build` release.
    rack, four inventory items, and Gravy's Garden Blog.
 4. Use Tab, Enter, and Space to select rack units and install every starter item.
    Confirm the tutorial cannot be accepted before its requirements are ready.
-5. Drag an inventory item onto the rack, move an installed item, press Escape to
+5. Drag an inventory item onto the rack, grab an installed rack face to move it,
+   use Enter or Space on that rack face for keyboard movement, press Escape to
    cancel a drag, and drop installed equipment on the inventory return zone.
    Confirm IDs, position, and power state remain correct.
-6. Accept the tutorial contract and confirm cash, gross income, net income,
-   fulfillment, actual revenue, and time remaining change.
+6. Confirm the tutorial shows 30 seconds and a five-second duration-derived SLA
+   buffer. Accept it and confirm cash, gross income, net income, fulfillment,
+   actual revenue, and time remaining change.
 7. Confirm electricity remains waived during the tutorial. Complete it in the
    QA build and confirm the store, three market offers, and normal electricity
    expense unlock.
@@ -111,7 +116,9 @@ The F10 panel is intentionally absent from a normal `npm run build` release.
    the affected slot.
 10. Test debt at -$9,999.99 and confirm play continues with a warning. Test
     exactly -$10,000 and below and confirm the bankruptcy screen persists.
-11. Buy an affordable item and confirm both cash and inventory change together.
+11. Buy an affordable item, confirm its resale is exactly half the paid price,
+    sell it from inventory, and confirm cash and inventory change atomically.
+    Confirm starter items are sale-locked before tutorial completion.
 12. Pause, save, return to the menu, refresh, and Continue. Confirm rack progress
     returns.
 13. Create a second slot, delete only that slot, and confirm Slot 1 remains.
@@ -119,9 +126,13 @@ The F10 panel is intentionally absent from a normal `npm run build` release.
     the malformed file does not replace the existing company.
 15. Preview compact and large interface scale, leave without saving to confirm
     reversion, then save and refresh to confirm persistence.
-16. At 390x844, confirm the save manager and options can be used without
-    horizontal scrolling. Rack editing may remain desktop-oriented.
-17. At 1280x720, 1440x900, and 1920x1080, inspect the menu, facility, contracts,
+16. With 30 inventory items and a full 12U rack, confirm Inventory and Installed
+    Controls scroll independently and do not move the outer page during drag.
+17. Accept one marketplace contract and confirm another offer immediately uses
+    residual capacity, reports exact shortages, and cannot overcommit the pool.
+18. At 390x844, confirm the save manager, options, and separate Contracts count
+    badge work without horizontal scrolling. Rack editing may remain desktop-oriented.
+19. At 1280x720, 1440x900, and 1920x1080, inspect the menu, facility, contracts,
     store, pause menu, error fallback, and QA panel for clipping and overlap.
 
 ## Known Phase 2 limits
@@ -131,5 +142,5 @@ The F10 panel is intentionally absent from a normal `npm run build` release.
   is not implemented yet.
 - Only the bedroom, starter marketplace, and Phase 1-compatible hardware are
   playable.
-- There is no selling, scrapping, negotiation, auto-renewal, customer growth,
+- There is no scrapping, negotiation, auto-renewal, customer growth,
   cloud save, backend, desktop packaging, audio, telemetry, or final artwork.

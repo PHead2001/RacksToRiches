@@ -1,7 +1,14 @@
 import { z } from "zod";
 
-import { CURRENT_GAME_VERSION } from "./constants";
+import {
+  CURRENT_GAME_VERSION,
+  STARTER_EQUIPMENT_INSTANCE_IDS,
+  TUTORIAL_DURATION_SECONDS,
+} from "./constants";
+import { calculateSlaBufferSeconds } from "./contracts";
+import { EQUIPMENT_DEFINITIONS } from "./definitions";
 import { DomainInvariantError } from "./errors";
+import { TUTORIAL_CONTRACT_ID } from "./marketplace";
 import type { GameState } from "./types";
 import { assertGameState } from "./validation";
 
@@ -10,7 +17,11 @@ const nonNegative = finiteNumber.nonnegative();
 const nonNegativeInteger = z.number().int().nonnegative();
 
 const equipmentInstanceSchema = z
-  .object({ id: z.string().min(1), definitionId: z.string().min(1) })
+  .object({
+    id: z.string().min(1),
+    definitionId: z.string().min(1),
+    acquisitionPrice: nonNegative,
+  })
   .strict();
 const placementSchema = equipmentInstanceSchema.extend({
   startUnit: nonNegativeInteger,
@@ -178,8 +189,127 @@ const migrateVersionOne: SaveMigration = (state) => {
   };
 };
 
+const starterEquipmentIds = new Set<string>(STARTER_EQUIPMENT_INSTANCE_IDS);
+
+function migrateEquipmentAcquisitionPrice(value: unknown): unknown {
+  const record = legacyRecordSchema.parse(value);
+  const id = record["id"];
+  const definitionId = record["definitionId"];
+  const definition = EQUIPMENT_DEFINITIONS.find(
+    (candidate) => candidate.id === definitionId,
+  );
+  return {
+    ...record,
+    acquisitionPrice:
+      typeof id === "string" && starterEquipmentIds.has(id)
+        ? 0
+        : (definition?.purchaseCost ?? 0),
+  };
+}
+
+function migrateRackEquipment(value: unknown): unknown {
+  const record = legacyRecordSchema.parse(value);
+  const equipment = z.array(z.unknown()).parse(record["equipment"]);
+  return {
+    ...record,
+    equipment: equipment.map(migrateEquipmentAcquisitionPrice),
+  };
+}
+
+function migrateFacilityEquipment(value: unknown): unknown {
+  const record = legacyRecordSchema.parse(value);
+  const racks = z.array(z.unknown()).parse(record["racks"]);
+  return { ...record, racks: racks.map(migrateRackEquipment) };
+}
+
+function migrateContractBalance(value: unknown): unknown {
+  const record = legacyRecordSchema.parse(value);
+  const id = record["id"];
+  const status = record["status"];
+  const oldDuration = record["totalDurationSeconds"];
+  const oldRemaining = record["remainingSeconds"];
+  const oldTolerance = record["customerTolerance"];
+  const oldViolation = record["violationSeconds"];
+  if (
+    typeof oldDuration !== "number" ||
+    !Number.isFinite(oldDuration) ||
+    oldDuration <= 0
+  ) {
+    return record;
+  }
+  const tutorial = id === TUTORIAL_CONTRACT_ID;
+  const newDuration = tutorial ? TUTORIAL_DURATION_SECONDS : oldDuration;
+  const newTolerance = calculateSlaBufferSeconds(newDuration);
+  const ratioIsValid =
+    typeof oldTolerance === "number" &&
+    Number.isFinite(oldTolerance) &&
+    oldTolerance > 0 &&
+    typeof oldViolation === "number" &&
+    Number.isFinite(oldViolation) &&
+    oldViolation >= 0;
+  const consumedRatio = ratioIsValid
+    ? Math.min(1, oldViolation / oldTolerance)
+    : null;
+  const remainingIsValid =
+    typeof oldRemaining === "number" &&
+    Number.isFinite(oldRemaining) &&
+    oldRemaining >= 0;
+  const completionRatio = remainingIsValid
+    ? Math.min(1, Math.max(0, (oldDuration - oldRemaining) / oldDuration))
+    : null;
+  const active = status === "active";
+  const migratedRemaining = tutorial
+    ? status === "offered"
+      ? newDuration
+      : status === "completed"
+        ? 0
+        : completionRatio !== null
+          ? active
+            ? Math.max(
+                Number.EPSILON,
+                newDuration * Math.max(0, 1 - completionRatio),
+              )
+            : newDuration * Math.max(0, 1 - completionRatio)
+          : oldRemaining
+    : oldRemaining;
+  return {
+    ...record,
+    totalDurationSeconds: newDuration,
+    remainingSeconds: migratedRemaining,
+    customerTolerance: newTolerance,
+    violationSeconds:
+      consumedRatio === null
+        ? oldViolation
+        : Math.min(
+            active ? newTolerance - Number.EPSILON : newTolerance,
+            consumedRatio * newTolerance,
+          ),
+  };
+}
+
+const migrateVersionTwo: SaveMigration = (state) => {
+  const record = legacyRecordSchema.parse(state);
+  const facilities = z.array(z.unknown()).parse(record["facilities"]);
+  const inventory = z.array(z.unknown()).parse(record["inventory"]);
+  const contracts = legacyRecordSchema.parse(record["contracts"]);
+  const offers = z.array(z.unknown()).parse(contracts["offers"]);
+  const active = z.array(z.unknown()).parse(contracts["active"]);
+  return {
+    ...record,
+    version: 3,
+    facilities: facilities.map(migrateFacilityEquipment),
+    inventory: inventory.map(migrateEquipmentAcquisitionPrice),
+    contracts: {
+      ...contracts,
+      offers: offers.map(migrateContractBalance),
+      active: active.map(migrateContractBalance),
+    },
+  };
+};
+
 export const SAVE_MIGRATIONS: ReadonlyMap<number, SaveMigration> = new Map([
   [1, migrateVersionOne],
+  [2, migrateVersionTwo],
 ]);
 
 const envelopeSchema = z
@@ -237,7 +367,20 @@ export function loadGame(serialized: string): LoadResult {
       },
     };
   }
-  const migrated = migrateEnvelope(envelopeResult.data);
+  let migrated: SaveEnvelope | undefined;
+  try {
+    migrated = migrateEnvelope(envelopeResult.data);
+  } catch (error: unknown) {
+    return {
+      ok: false,
+      error: {
+        kind: "invalid-save",
+        issues: [
+          error instanceof Error ? error.message : "Save migration failed",
+        ],
+      },
+    };
+  }
   if (migrated === undefined) {
     return {
       ok: false,

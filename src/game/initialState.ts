@@ -1,4 +1,5 @@
-import { CURRENT_GAME_VERSION } from "./constants";
+import { CURRENT_GAME_VERSION, TUTORIAL_DURATION_SECONDS } from "./constants";
+import { calculateSlaBufferSeconds } from "./contracts";
 import { CUSTOMER_DEFINITIONS } from "./definitions";
 import { assertFiniteNonNegative } from "./errors";
 import { DomainInvariantError } from "./errors";
@@ -54,10 +55,26 @@ export function createInitialState(
     ],
     activeFacilityId: "facility-bedroom-1",
     inventory: [
-      { id: "equipment-refurbished-1", definitionId: "refurbished-desktop" },
-      { id: "equipment-router-1", definitionId: "consumer-router" },
-      { id: "equipment-power-strip-1", definitionId: "power-strip" },
-      { id: "equipment-desk-fan-1", definitionId: "desk-fan" },
+      {
+        id: "equipment-refurbished-1",
+        definitionId: "refurbished-desktop",
+        acquisitionPrice: 0,
+      },
+      {
+        id: "equipment-router-1",
+        definitionId: "consumer-router",
+        acquisitionPrice: 0,
+      },
+      {
+        id: "equipment-power-strip-1",
+        definitionId: "power-strip",
+        acquisitionPrice: 0,
+      },
+      {
+        id: "equipment-desk-fan-1",
+        definitionId: "desk-fan",
+        acquisitionPrice: 0,
+      },
     ],
     contracts: {
       offers: [
@@ -74,10 +91,12 @@ export function createInitialState(
             reliability: 0.8,
           },
           baseRevenuePerSecond: 2,
-          remainingSeconds: 180,
-          totalDurationSeconds: 180,
+          remainingSeconds: TUTORIAL_DURATION_SECONDS,
+          totalDurationSeconds: TUTORIAL_DURATION_SECONDS,
           growthPotential: "high",
-          customerTolerance: 45,
+          customerTolerance: calculateSlaBufferSeconds(
+            TUTORIAL_DURATION_SECONDS,
+          ),
           performanceScore: 0,
           violationSeconds: 0,
           autoRenew: false,

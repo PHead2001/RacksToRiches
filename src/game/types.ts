@@ -111,6 +111,7 @@ export interface CustomerDefinition {
 export interface EquipmentInstance {
   id: string;
   definitionId: string;
+  acquisitionPrice: number;
 }
 
 export interface EquipmentPlacement extends EquipmentInstance {

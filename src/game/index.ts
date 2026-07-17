@@ -3,15 +3,29 @@ export {
   BANKRUPTCY_THRESHOLD,
   CURRENT_GAME_VERSION,
   FULFILLMENT_EPSILON,
+  MAXIMUM_SLA_BUFFER_SECONDS,
+  MINIMUM_SLA_BUFFER_SECONDS,
+  SLA_BUFFER_RATIO,
+  STARTER_EQUIPMENT_INSTANCE_IDS,
+  TUTORIAL_DURATION_SECONDS,
   VIOLATION_RECOVERY_RATE,
 } from "./constants";
 export { calculateAllRackCapacities, calculateRackCapacity } from "./capacity";
 export {
   aggregateContractDemand,
+  CAPABILITY_REQUIREMENT_KEYS,
+  calculateServicePoolProjection,
+  calculateSlaBufferSeconds,
   calculateContractPerformance,
   calculateFulfillment,
   revenueMultiplier,
+  CONSUMABLE_RESOURCE_KEYS,
   validateContractRequirements,
+} from "./contracts";
+export type {
+  ServicePoolCapabilityProjection,
+  ServicePoolProjection,
+  ServicePoolResourceProjection,
 } from "./contracts";
 export {
   calculateContractReadiness,
@@ -42,6 +56,8 @@ export {
   purchaseEquipment,
   rejectContractOffer,
   removeEquipment,
+  calculateResaleProceeds,
+  sellEquipment,
   setEquipmentPower,
   stampLastSaved,
 } from "./commands";

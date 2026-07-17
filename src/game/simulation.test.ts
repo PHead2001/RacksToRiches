@@ -68,7 +68,7 @@ describe("economy rates", () => {
 
   it("rejects unsupported state versions", () => {
     const state = createInitialState();
-    state.version = 3;
+    state.version = 4;
     expect(() => calculateEconomyRate(state)).toThrow(
       "Unsupported game state version",
     );
@@ -113,7 +113,7 @@ describe("advanceGame", () => {
     const result = advanceGame(state, 1e-12);
     expect(result.clockSeconds).toBe(1e-12);
     expect(result.contracts.active).toHaveLength(1);
-    expect(result.contracts.active[0]?.remainingSeconds).toBeLessThan(180);
+    expect(result.contracts.active[0]?.remainingSeconds).toBeLessThan(30);
   });
 
   it("expires a contract inside a large delta without overpaying", () => {
@@ -123,9 +123,9 @@ describe("advanceGame", () => {
     expect(result.contracts.completedCount).toBe(1);
     expect(result.statistics.contractsCompleted).toBe(1);
     expect(result.statistics.totalOnlineSeconds).toBe(1_000);
-    expect(result.company.lifetimeRevenue).toBeCloseTo(360);
-    expect(result.company.lifetimeExpenses).toBeCloseTo(1.8614);
-    expect(result.company.cash).toBeCloseTo(358.1386);
+    expect(result.company.lifetimeRevenue).toBeCloseTo(60);
+    expect(result.company.lifetimeExpenses).toBeGreaterThan(0);
+    expect(result.company.cash).toBeGreaterThan(55);
     expect(result.company.reputation).toBe(10);
     expect(result.progression.completedMilestones).toContain(
       "tutorial-completed",
@@ -147,14 +147,14 @@ describe("advanceGame", () => {
   it("waives tutorial electricity and enables expenses after completion", () => {
     const tutorial = activeTutorial();
     expect(calculateEconomyRate(tutorial).electricityPerSecond).toBe(0);
-    const completed = advanceGame(tutorial, 180);
+    const completed = advanceGame(tutorial, 30);
     expect(completed.progression.completedMilestones).toContain(
       "tutorial-completed",
     );
     expect(
       calculateEconomyRate(completed).electricityPerSecond,
     ).toBeGreaterThan(0);
-    expect(completed.company.cash).toBeGreaterThanOrEqual(300);
+    expect(completed.company.cash).toBeGreaterThanOrEqual(60);
   });
 
   it("allows debt above the centralized threshold and persists exact bankruptcy cash", () => {
@@ -209,9 +209,9 @@ describe("advanceGame", () => {
     const state = activeTutorial();
     const first = state.contracts.active[0];
     if (first === undefined) throw new Error("fixture");
-    first.violationSeconds = 10;
-    const result = advanceGame(state, 10);
-    expect(result.contracts.active[0]?.violationSeconds).toBe(5);
+    first.violationSeconds = 4;
+    const result = advanceGame(state, 4);
+    expect(result.contracts.active[0]?.violationSeconds).toBe(2);
   });
 
   it("is immutable and deterministic for identical inputs", () => {

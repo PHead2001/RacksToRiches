@@ -1,5 +1,5 @@
 import { calculateAllRackCapacities } from "./capacity";
-import { VIOLATION_RECOVERY_RATE } from "./constants";
+import { FULFILLMENT_EPSILON, VIOLATION_RECOVERY_RATE } from "./constants";
 import { calculateContractPerformance } from "./contracts";
 import { calculateEconomyRate } from "./economy";
 import { DomainInvariantError, assertFiniteNonNegative } from "./errors";
@@ -56,7 +56,7 @@ export function advanceGame(state: GameState, deltaSeconds: number): GameState {
           `Missing performance for active contract: ${contract.id}`,
         );
       }
-      if (score < 1) {
+      if (score + FULFILLMENT_EPSILON < 1) {
         stepSeconds = Math.min(
           stepSeconds,
           contract.customerTolerance - contract.violationSeconds,

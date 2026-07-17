@@ -129,10 +129,33 @@ describe("game store", () => {
     });
     expect(store.getState().notifications).toHaveLength(1);
     expect(store.getState().notifications[0]?.message).toBe("Latest save");
+    store.getState().notify({
+      key: "warning-default",
+      type: "warning",
+      message: "Temporary warning",
+    });
+    store.getState().notify({
+      key: "error-default",
+      type: "error",
+      message: "Temporary error",
+    });
+    expect(store.getState().notifications).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          key: "warning-default",
+          durationMilliseconds: 8_000,
+        }),
+        expect.objectContaining({
+          key: "error-default",
+          durationMilliseconds: 8_000,
+        }),
+      ]),
+    );
     const notificationId = store.getState().notifications[0]?.id;
     if (notificationId === undefined) throw new Error("fixture");
     store.getState().dismissNotification(notificationId);
-    expect(store.getState().notifications).toEqual([]);
+    expect(store.getState().notifications).toHaveLength(2);
+    store.setState({ notifications: [] });
 
     await store.getState().createGame("slot-1", "Transition Test");
     store.setState({ notifications: [] });
@@ -153,6 +176,25 @@ describe("game store", () => {
     if (completed === null) throw new Error("fixture");
     store.getState().setRuntimeState(completed);
     expect(store.getState().notifications).toEqual([]);
+  });
+
+  it("uses stable unique development-log IDs for repeated same-time commands and undo", async () => {
+    const { store } = setup();
+    await store.getState().boot();
+    await store.getState().createGame("slot-1", "Log Test");
+    expect(
+      store.getState().applyDevelopmentCommand({ type: "add-cash", amount: 1 }),
+    ).toBe(true);
+    expect(
+      store.getState().applyDevelopmentCommand({ type: "add-cash", amount: 1 }),
+    ).toBe(true);
+    expect(store.getState().undoDevelopmentCommand()).toBe(true);
+    const log = store.getState().developmentLog;
+    expect(log).toHaveLength(3);
+    expect(new Set(log.map(({ id }) => id)).size).toBe(3);
+    expect(log.map(({ timestamp }) => timestamp)).toEqual([100, 100, 100]);
+    expect(log.at(-1)?.commandType).toBe("undo");
+    expect(() => JSON.stringify(log)).not.toThrow();
   });
 
   it("persists and reloads a bankrupt company into its terminal state", async () => {

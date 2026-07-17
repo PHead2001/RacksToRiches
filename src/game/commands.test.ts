@@ -2,6 +2,9 @@ import { describe, expect, it } from "vitest";
 
 import {
   acceptContract,
+  calculateAllRackCapacities,
+  calculateResaleProceeds,
+  calculateSlaBufferSeconds,
   createInitialState,
   equipmentName,
   fillStarterMarketplace,
@@ -13,6 +16,7 @@ import {
   purchaseEquipment,
   rejectContractOffer,
   removeEquipment,
+  sellEquipment,
   setEquipmentPower,
   stampLastSaved,
   TUTORIAL_MILESTONE_ID,
@@ -94,6 +98,7 @@ describe("Phase 2 domain commands", () => {
     expect(purchased.state.inventory).toHaveLength(
       initial.inventory.length + 1,
     );
+    expect(purchased.state.inventory.at(-1)?.acquisitionPrice).toBe(300);
     expect(base.company.cash).toBe(0);
     expect(
       purchaseEquipment(
@@ -115,6 +120,89 @@ describe("Phase 2 domain commands", () => {
       ),
     ).toBe(false);
     expect(equipmentName("consumer-router")).toBe("Consumer router");
+  });
+
+  it("sells one inventory instance for exactly half its recorded price", () => {
+    const base = createInitialState({ seed: 42 });
+    base.company.cash = 500;
+    base.progression.completedMilestones.push(TUTORIAL_MILESTONE_ID);
+    const purchased = purchaseEquipment(base, "used-2u-compute");
+    if (!purchased.ok) throw new Error(purchased.error.message);
+    const item = purchased.state.inventory.at(-1);
+    if (item === undefined) throw new Error("fixture");
+    const before = structuredClone(purchased.state);
+    const sold = sellEquipment(purchased.state, item.id);
+    expect(sold).toMatchObject({
+      ok: true,
+      state: { company: { cash: purchased.state.company.cash + 150 } },
+    });
+    expect(calculateResaleProceeds(10.01)).toBe(5.01);
+    expect(purchased.state).toEqual(before);
+    if (!sold.ok) return;
+    const afterSale = structuredClone(sold.state);
+    expect(sellEquipment(sold.state, item.id)).toMatchObject({
+      ok: false,
+      error: { code: "NOT_FOUND" },
+    });
+    expect(sold.state).toEqual(afterSale);
+    expect(sellEquipment(base, "equipment-router-1")).toMatchObject({
+      ok: true,
+      state: { company: { cash: 500 } },
+    });
+    const tutorial = createInitialState();
+    expect(sellEquipment(tutorial, "equipment-router-1")).toMatchObject({
+      ok: false,
+      error: { code: "TUTORIAL_REQUIRED" },
+    });
+    expect(sellEquipment(tutorial, "missing")).toMatchObject({
+      ok: false,
+      error: { code: "NOT_FOUND" },
+    });
+    const installed = placeEquipment(
+      base,
+      "equipment-router-1",
+      "rack-starter-1",
+      0,
+    );
+    if (!installed.ok) throw new Error(installed.error.message);
+    expect(sellEquipment(installed.state, "equipment-router-1")).toMatchObject({
+      ok: false,
+      error: { code: "NOT_IN_INVENTORY" },
+    });
+  });
+
+  it("blocks unsafe aggregate contract overcommit without changing state", () => {
+    let state = createInitialState();
+    for (const [id, unit] of [
+      ["equipment-refurbished-1", 0],
+      ["equipment-router-1", 4],
+      ["equipment-power-strip-1", 5],
+      ["equipment-desk-fan-1", 6],
+    ] as const) {
+      const placed = placeEquipment(state, id, "rack-starter-1", unit);
+      if (!placed.ok) throw new Error(placed.error.message);
+      state = placed.state;
+    }
+    const capacity = calculateAllRackCapacities(state).get("rack-starter-1");
+    if (capacity === undefined) throw new Error("fixture");
+    const tutorial = state.contracts.offers[0];
+    if (tutorial === undefined) throw new Error("fixture");
+    const requirement = capacity.compute * 0.6;
+    state.progression.completedMilestones.push(TUTORIAL_MILESTONE_ID);
+    state.contracts.offers = [
+      { ...tutorial, id: "offer-a", requirements: { compute: requirement } },
+      { ...tutorial, id: "offer-b", requirements: { compute: requirement } },
+    ];
+    const first = acceptContract(state, "offer-a", "rack-starter-1");
+    if (!first.ok) throw new Error(first.error.message);
+    const snapshot = structuredClone(first.state);
+    expect(
+      acceptContract(first.state, "offer-b", "rack-starter-1"),
+    ).toMatchObject({
+      ok: false,
+      error: { code: "CAPACITY_SHORTFALL" },
+    });
+    expect(first.state).toEqual(snapshot);
   });
 
   it("keeps the tutorial recoverable and assigns accepted contracts", () => {
@@ -231,6 +319,7 @@ describe("Phase 2 domain commands", () => {
     rack.equipment = Array.from({ length: 6 }, (_, index) => ({
       id: `full-${String(index)}`,
       definitionId: "used-2u-compute",
+      acquisitionPrice: 0,
       startUnit: index * 2,
       poweredOn: index % 2 === 0,
     }));
@@ -328,6 +417,13 @@ describe("Phase 2 domain commands", () => {
       contracts: { ...initial.contracts, offers: [] },
     });
     expect(unlocked.contracts.offers).toHaveLength(3);
+    expect(
+      unlocked.contracts.offers.every(
+        (offer) =>
+          offer.customerTolerance ===
+          calculateSlaBufferSeconds(offer.totalDurationSeconds),
+      ),
+    ).toBe(true);
     expect(
       unlocked.contracts.offers.every(({ requirements }) =>
         Object.values(requirements).some(

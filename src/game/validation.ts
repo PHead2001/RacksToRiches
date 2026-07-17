@@ -1,6 +1,9 @@
 import { calculateAllRackCapacities } from "./capacity";
 import { CURRENT_GAME_VERSION } from "./constants";
-import { validateContractRequirements } from "./contracts";
+import {
+  calculateSlaBufferSeconds,
+  validateContractRequirements,
+} from "./contracts";
 import {
   CUSTOMER_DEFINITIONS,
   RESEARCH_DEFINITIONS,
@@ -57,6 +60,15 @@ function assertContract(contract: ContractInstance): void {
     contract.customerTolerance,
     `${contract.id}.customerTolerance`,
   );
+  if (
+    contract.customerTolerance !==
+    calculateSlaBufferSeconds(contract.totalDurationSeconds)
+  ) {
+    throw new DomainInvariantError(
+      "INVALID_CONTRACT",
+      `${contract.id} SLA buffer does not match its duration`,
+    );
+  }
   assertFiniteNonNegative(
     contract.performanceScore,
     `${contract.id}.performanceScore`,
@@ -138,7 +150,13 @@ export function assertGameState(state: GameState): void {
   }
   const rackIds: string[] = [];
   const equipmentIds = state.inventory.map(({ id }) => id);
-  for (const item of state.inventory) getEquipmentDefinition(item.definitionId);
+  for (const item of state.inventory) {
+    getEquipmentDefinition(item.definitionId);
+    assertFiniteNonNegative(
+      item.acquisitionPrice,
+      `${item.id}.acquisitionPrice`,
+    );
+  }
   for (const facility of state.facilities) {
     const facilityDefinition = getFacilityDefinition(facility.definitionId);
     if (facility.racks.length > facilityDefinition.maximumRacks) {
@@ -156,7 +174,13 @@ export function assertGameState(state: GameState): void {
           `${rackDefinition.id} is incompatible with ${facilityDefinition.id}`,
         );
       }
-      for (const equipment of rack.equipment) equipmentIds.push(equipment.id);
+      for (const equipment of rack.equipment) {
+        equipmentIds.push(equipment.id);
+        assertFiniteNonNegative(
+          equipment.acquisitionPrice,
+          `${equipment.id}.acquisitionPrice`,
+        );
+      }
     }
   }
   assertUnique(rackIds, "Rack instance");

@@ -143,13 +143,18 @@ describe("rack placement", () => {
     incompatible.inventory.push({
       id: "portable",
       definitionId: "portable-ac",
+      acquisitionPrice: 0,
     });
     expect(
       placeEquipment(incompatible, "portable", "rack-starter-1", 0),
     ).toMatchObject({ ok: false, error: { code: "INCOMPATIBLE_EQUIPMENT" } });
 
     const unknown = createInitialState();
-    unknown.inventory.push({ id: "mystery", definitionId: "missing" });
+    unknown.inventory.push({
+      id: "mystery",
+      definitionId: "missing",
+      acquisitionPrice: 0,
+    });
     expect(
       placeEquipment(unknown, "mystery", "rack-starter-1", 0),
     ).toMatchObject({
@@ -170,12 +175,14 @@ describe("power and cooling", () => {
       ...Array.from({ length: 5 }, (_, index) => ({
         id: `compute-${String(index)}`,
         definitionId: "used-2u-compute",
+        acquisitionPrice: 0,
         startUnit: index * 2,
         poweredOn: true,
       })),
       {
         id: "power",
         definitionId: "power-strip",
+        acquisitionPrice: 0,
         startUnit: 10,
         poweredOn: true,
       },
@@ -198,6 +205,7 @@ describe("power and cooling", () => {
       {
         id: "compute",
         definitionId: "used-2u-compute",
+        acquisitionPrice: 0,
         startUnit: 0,
         poweredOn: true,
       },
@@ -218,12 +226,14 @@ describe("power and cooling", () => {
       {
         id: "same",
         definitionId: "consumer-router",
+        acquisitionPrice: 0,
         startUnit: 0,
         poweredOn: true,
       },
       {
         id: "same",
         definitionId: "consumer-router",
+        acquisitionPrice: 0,
         startUnit: 1,
         poweredOn: true,
       },
@@ -249,6 +259,7 @@ describe("power and cooling", () => {
         {
           id: "ac",
           definitionId: "portable-ac",
+          acquisitionPrice: 0,
           startUnit: 0,
           poweredOn: true,
         },
