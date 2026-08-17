@@ -1,12 +1,15 @@
-import { CURRENT_GAME_VERSION } from "./constants";
+import { CURRENT_GAME_VERSION, TUTORIAL_DURATION_SECONDS } from "./constants";
+import { calculateSlaBufferSeconds } from "./contracts";
 import { CUSTOMER_DEFINITIONS } from "./definitions";
 import { assertFiniteNonNegative } from "./errors";
+import { DomainInvariantError } from "./errors";
 import { validateSeed } from "./random";
 import type { GameState } from "./types";
 
 export interface InitialStateOptions {
   seed?: number;
   startedAt?: number;
+  companyName?: string;
 }
 
 export function createInitialState(
@@ -14,16 +17,23 @@ export function createInitialState(
 ): GameState {
   const seed = options.seed ?? 0x5eed1234;
   const startedAt = options.startedAt ?? 0;
+  const companyName = options.companyName?.trim() ?? "Racks to Riches Hosting";
   validateSeed(seed);
   assertFiniteNonNegative(startedAt, "startedAt");
+  if (companyName.length === 0 || companyName.length > 60) {
+    throw new DomainInvariantError(
+      "INVALID_STATE",
+      "Company name must contain between 1 and 60 characters",
+    );
+  }
 
   return {
     version: CURRENT_GAME_VERSION,
     clockSeconds: 0,
     rngSeed: seed,
     company: {
-      name: "Racks to Riches Hosting",
-      cash: 500,
+      name: companyName,
+      cash: 0,
       reputation: 0,
       researchPoints: 0,
       lifetimeRevenue: 0,
@@ -45,10 +55,26 @@ export function createInitialState(
     ],
     activeFacilityId: "facility-bedroom-1",
     inventory: [
-      { id: "equipment-refurbished-1", definitionId: "refurbished-desktop" },
-      { id: "equipment-router-1", definitionId: "consumer-router" },
-      { id: "equipment-power-strip-1", definitionId: "power-strip" },
-      { id: "equipment-desk-fan-1", definitionId: "desk-fan" },
+      {
+        id: "equipment-refurbished-1",
+        definitionId: "refurbished-desktop",
+        acquisitionPrice: 0,
+      },
+      {
+        id: "equipment-router-1",
+        definitionId: "consumer-router",
+        acquisitionPrice: 0,
+      },
+      {
+        id: "equipment-power-strip-1",
+        definitionId: "power-strip",
+        acquisitionPrice: 0,
+      },
+      {
+        id: "equipment-desk-fan-1",
+        definitionId: "desk-fan",
+        acquisitionPrice: 0,
+      },
     ],
     contracts: {
       offers: [
@@ -65,10 +91,12 @@ export function createInitialState(
             reliability: 0.8,
           },
           baseRevenuePerSecond: 2,
-          remainingSeconds: 180,
-          totalDurationSeconds: 180,
+          remainingSeconds: TUTORIAL_DURATION_SECONDS,
+          totalDurationSeconds: TUTORIAL_DURATION_SECONDS,
           growthPotential: "high",
-          customerTolerance: 45,
+          customerTolerance: calculateSlaBufferSeconds(
+            TUTORIAL_DURATION_SECONDS,
+          ),
           performanceScore: 0,
           violationSeconds: 0,
           autoRenew: false,
@@ -85,7 +113,11 @@ export function createInitialState(
       currentStage: 1,
     })),
     research: { unlockedNodeIds: [] },
-    progression: { completedMilestones: [], prestigeCurrency: 0 },
+    progression: {
+      completedMilestones: [],
+      prestigeCurrency: 0,
+      terminalState: null,
+    },
     statistics: {
       startedAt,
       lastSavedAt: startedAt,

@@ -1,19 +1,81 @@
 import { assertFiniteNonNegative, DomainInvariantError } from "./errors";
+import {
+  FULFILLMENT_EPSILON,
+  MAXIMUM_SLA_BUFFER_SECONDS,
+  MINIMUM_SLA_BUFFER_SECONDS,
+  SLA_BUFFER_RATIO,
+} from "./constants";
 import type {
   ContractInstance,
   ContractRequirements,
   RackCapacity,
+  ResourceKey,
   RequirementKey,
 } from "./types";
 
-const REQUIREMENT_KEYS: readonly RequirementKey[] = [
+export const CONSUMABLE_RESOURCE_KEYS = [
   "compute",
   "gpuCompute",
   "storage",
   "bandwidth",
+] as const satisfies readonly ResourceKey[];
+
+export const CAPABILITY_REQUIREMENT_KEYS = [
   "reliability",
   "security",
+] as const satisfies readonly RequirementKey[];
+
+const REQUIREMENT_KEYS: readonly RequirementKey[] = [
+  ...CONSUMABLE_RESOURCE_KEYS,
+  ...CAPABILITY_REQUIREMENT_KEYS,
 ];
+
+export interface ServicePoolResourceProjection {
+  key: ResourceKey;
+  total: number;
+  used: number;
+  remaining: number;
+  candidateRequired: number;
+  projectedRemaining: number;
+  shortfall: number;
+}
+
+export interface ServicePoolCapabilityProjection {
+  key: "reliability" | "security";
+  available: number;
+  required: number;
+  shortfall: number;
+}
+
+export interface ServicePoolProjection {
+  resources: readonly ServicePoolResourceProjection[];
+  capabilities: readonly ServicePoolCapabilityProjection[];
+  projectedDemand: ContractRequirements;
+  projectedFulfillment: number;
+  limitingResources: readonly {
+    key: RequirementKey;
+    shortfall: number;
+  }[];
+  safe: boolean;
+}
+
+export function calculateSlaBufferSeconds(
+  totalDurationSeconds: number,
+): number {
+  if (!Number.isFinite(totalDurationSeconds) || totalDurationSeconds <= 0) {
+    throw new DomainInvariantError(
+      "INVALID_CONTRACT",
+      "Contract duration must be finite and positive",
+    );
+  }
+  return Math.min(
+    MAXIMUM_SLA_BUFFER_SECONDS,
+    Math.max(
+      MINIMUM_SLA_BUFFER_SECONDS,
+      Math.round(totalDurationSeconds * SLA_BUFFER_RATIO),
+    ),
+  );
+}
 
 export function validateContractRequirements(
   requirements: ContractRequirements,
@@ -74,13 +136,89 @@ export function aggregateContractDemand(
       continue;
     }
     validateContractRequirements(contract.requirements);
-    for (const key of REQUIREMENT_KEYS) {
+    for (const key of CONSUMABLE_RESOURCE_KEYS) {
       const value = contract.requirements[key];
       if (value === undefined || value === 0) continue;
       demand[key] = (demand[key] ?? 0) + value;
     }
+    for (const key of CAPABILITY_REQUIREMENT_KEYS) {
+      const value = contract.requirements[key];
+      if (value === undefined || value === 0) continue;
+      demand[key] = Math.max(demand[key] ?? 0, value);
+    }
   }
   return demand;
+}
+
+export function calculateServicePoolProjection(
+  capacity: RackCapacity,
+  activeContracts: readonly ContractInstance[],
+  targetId: string,
+  candidate?: ContractInstance,
+): ServicePoolProjection {
+  const activeDemand = aggregateContractDemand(activeContracts, targetId);
+  const projectedDemand: ContractRequirements = { ...activeDemand };
+  if (candidate !== undefined) {
+    validateContractRequirements(candidate.requirements);
+    for (const key of CONSUMABLE_RESOURCE_KEYS) {
+      const required = candidate.requirements[key] ?? 0;
+      if (required > 0) {
+        projectedDemand[key] = (projectedDemand[key] ?? 0) + required;
+      }
+    }
+    for (const key of CAPABILITY_REQUIREMENT_KEYS) {
+      const required = candidate.requirements[key] ?? 0;
+      if (required > 0) {
+        projectedDemand[key] = Math.max(projectedDemand[key] ?? 0, required);
+      }
+    }
+  }
+
+  const resources = CONSUMABLE_RESOURCE_KEYS.map((key) => {
+    const total = capacity[key];
+    const used = activeDemand[key] ?? 0;
+    const candidateRequired = candidate?.requirements[key] ?? 0;
+    const rawRemaining = total - used;
+    const rawProjectedRemaining = rawRemaining - candidateRequired;
+    return {
+      key,
+      total,
+      used,
+      remaining: Math.max(0, rawRemaining),
+      candidateRequired,
+      projectedRemaining: Math.max(0, rawProjectedRemaining),
+      shortfall: Math.max(0, -rawProjectedRemaining),
+    };
+  });
+  const capabilities = CAPABILITY_REQUIREMENT_KEYS.map((key) => {
+    const required = projectedDemand[key] ?? 0;
+    return {
+      key,
+      available: capacity[key],
+      required,
+      shortfall: Math.max(0, required - capacity[key]),
+    };
+  });
+  const hasDemand = REQUIREMENT_KEYS.some(
+    (key) => (projectedDemand[key] ?? 0) > 0,
+  );
+  const projectedFulfillment = hasDemand
+    ? calculateFulfillment(capacity, projectedDemand)
+    : 1;
+  const limitingResources = [
+    ...resources.map(({ key, shortfall }) => ({ key, shortfall })),
+    ...capabilities.map(({ key, shortfall }) => ({ key, shortfall })),
+  ].filter(({ shortfall }) => shortfall > FULFILLMENT_EPSILON);
+  return {
+    resources,
+    capabilities,
+    projectedDemand,
+    projectedFulfillment,
+    limitingResources,
+    safe:
+      projectedFulfillment >= 1 - FULFILLMENT_EPSILON &&
+      limitingResources.length === 0,
+  };
 }
 
 export function calculateContractPerformance(

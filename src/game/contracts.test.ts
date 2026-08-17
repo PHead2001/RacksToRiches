@@ -4,9 +4,15 @@ import {
   aggregateContractDemand,
   calculateContractPerformance,
   calculateFulfillment,
+  calculateServicePoolProjection,
+  calculateSlaBufferSeconds,
   revenueMultiplier,
   validateContractRequirements,
 } from "./contracts";
+import {
+  calculateContractReadiness,
+  calculateSlaBuffer,
+} from "./contractStatus";
 import { DomainInvariantError } from "./errors";
 import type { ContractInstance, RackCapacity } from "./types";
 
@@ -45,7 +51,7 @@ function contract(
     remainingSeconds: 10,
     totalDurationSeconds: 10,
     growthPotential: "none",
-    customerTolerance: 10,
+    customerTolerance: 5,
     performanceScore: 0,
     violationSeconds: 0,
     autoRenew: false,
@@ -129,6 +135,54 @@ describe("contract fulfillment", () => {
     ).toEqual({ compute: 15, storage: 4 });
   });
 
+  it("derives bounded SLA buffers from duration", () => {
+    expect(calculateSlaBufferSeconds(30)).toBe(5);
+    expect(calculateSlaBufferSeconds(180)).toBe(18);
+    expect(calculateSlaBufferSeconds(300)).toBe(30);
+    expect(calculateSlaBufferSeconds(600)).toBe(45);
+    expect(() => calculateSlaBufferSeconds(0)).toThrow(DomainInvariantError);
+  });
+
+  it("projects residual consumable capacity without consuming capabilities", () => {
+    const active = contract({
+      compute: 40,
+      storage: 7,
+      bandwidth: 60,
+      reliability: 0.9,
+    });
+    const candidate = {
+      ...contract({ compute: 25, storage: 10, reliability: 0.95 }),
+      id: "candidate",
+      status: "offered" as const,
+      assignedTargetId: undefined,
+    };
+    const projection = calculateServicePoolProjection(
+      capacity({ compute: 60, storage: 85, bandwidth: 100 }),
+      [active],
+      "rack-1",
+      candidate,
+    );
+    expect(projection.resources).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          key: "compute",
+          used: 40,
+          remaining: 20,
+          candidateRequired: 25,
+          shortfall: 5,
+        }),
+        expect.objectContaining({ key: "storage", used: 7, remaining: 78 }),
+      ]),
+    );
+    expect(projection.capabilities).toContainEqual({
+      key: "reliability",
+      available: 1,
+      required: 0.95,
+      shortfall: 0,
+    });
+    expect(projection.safe).toBe(false);
+  });
+
   it("fails explicitly when an active assignment has no capacity", () => {
     expect(() =>
       calculateContractPerformance(
@@ -141,5 +195,93 @@ describe("contract fulfillment", () => {
         compute: 1,
       }),
     ).toThrow(DomainInvariantError);
+  });
+
+  it("reports consumed, recovered, remaining, and breached SLA buffer", () => {
+    const warning = {
+      ...contract({ compute: 100 }),
+      totalDurationSeconds: 450,
+      remainingSeconds: 450,
+      customerTolerance: 45,
+      performanceScore: 0.8,
+      violationSeconds: 12,
+    };
+    expect(calculateSlaBuffer(warning)).toEqual({
+      totalSeconds: 45,
+      consumedSeconds: 12,
+      remainingSeconds: 33,
+      state: "Warning",
+    });
+    expect(
+      calculateSlaBuffer({
+        ...warning,
+        performanceScore: 1,
+        violationSeconds: 7,
+      }),
+    ).toMatchObject({ remainingSeconds: 38, state: "Recovering" });
+    expect(
+      calculateSlaBuffer({
+        ...warning,
+        performanceScore: 1,
+        violationSeconds: 0,
+      }),
+    ).toMatchObject({ remainingSeconds: 45, state: "Healthy" });
+    expect(calculateSlaBuffer({ ...warning, violationSeconds: 50 })).toEqual({
+      totalSeconds: 45,
+      consumedSeconds: 45,
+      remainingSeconds: 0,
+      state: "Breached",
+    });
+  });
+
+  it("uses one epsilon-aware readiness result for labels and acceptance", () => {
+    const tutorial = {
+      ...contract({ compute: 100 }),
+      id: "contract-tutorial-1",
+      status: "offered" as const,
+      assignedTargetId: undefined,
+    };
+    expect(
+      calculateContractReadiness(tutorial, capacity({ compute: 0 })),
+    ).toMatchObject({
+      kind: "install-hardware",
+      label: "INSTALL HARDWARE",
+      canAccept: false,
+    });
+    expect(
+      calculateContractReadiness(tutorial, capacity({ compute: 99 })),
+    ).toMatchObject({
+      kind: "capacity-shortfall",
+      label: "CAPACITY SHORTFALL",
+      canAccept: false,
+    });
+    expect(
+      calculateContractReadiness(tutorial, capacity({ compute: 100 - 5e-10 })),
+    ).toMatchObject({ kind: "ready", label: "READY", canAccept: true });
+    const active = {
+      ...tutorial,
+      status: "active" as const,
+      assignedTargetId: "rack-1",
+    };
+    expect(
+      calculateContractReadiness(
+        active,
+        capacity({ compute: 100 }),
+        [active],
+        "rack-1",
+      ),
+    ).toMatchObject({ kind: "active", label: "ACTIVE", canAccept: false });
+    expect(
+      calculateContractReadiness(
+        active,
+        capacity({ compute: 50 }),
+        [active],
+        "rack-1",
+      ),
+    ).toMatchObject({
+      kind: "sla-warning",
+      label: "SLA WARNING",
+      canAccept: false,
+    });
   });
 });

@@ -111,6 +111,7 @@ export interface CustomerDefinition {
 export interface EquipmentInstance {
   id: string;
   definitionId: string;
+  acquisitionPrice: number;
 }
 
 export interface EquipmentPlacement extends EquipmentInstance {
@@ -159,6 +160,17 @@ export interface CustomerState {
   currentStage: number;
 }
 
+export type TerminalState =
+  | {
+      kind: "tutorial-failed";
+      occurredAtSeconds: number;
+    }
+  | {
+      kind: "bankrupt";
+      occurredAtSeconds: number;
+      tutorialFailed: boolean;
+    };
+
 export interface GameState {
   version: number;
   clockSeconds: number;
@@ -187,6 +199,7 @@ export interface GameState {
   progression: {
     completedMilestones: string[];
     prestigeCurrency: number;
+    terminalState: TerminalState | null;
   };
   statistics: {
     startedAt: number;

@@ -15,7 +15,147 @@ describe("versioned persistence", () => {
   it("round-trips a valid save", () => {
     const state = createInitialState({ seed: 123, startedAt: 456 });
     expect(loadGame(serializeGame(state))).toEqual({ ok: true, state });
-    expect(SAVE_MIGRATIONS.size).toBe(0);
+    expect(SAVE_MIGRATIONS.size).toBe(2);
+  });
+
+  it("migrates version-one saves without changing their recorded cash", () => {
+    const current = createInitialState({ companyName: "Legacy", seed: 44 });
+    current.company.cash = 321.5;
+    const legacy = {
+      ...current,
+      version: 1,
+      progression: {
+        completedMilestones: current.progression.completedMilestones,
+        prestigeCurrency: current.progression.prestigeCurrency,
+      },
+    };
+    const loaded = loadGame(JSON.stringify({ version: 1, state: legacy }));
+    expect(loaded).toMatchObject({
+      ok: true,
+      state: {
+        version: 3,
+        company: { cash: 321.5 },
+        progression: { terminalState: null },
+      },
+    });
+  });
+
+  it("migrates version-two tutorial progress, SLA consumption, and acquisition prices", () => {
+    const current = createInitialState({ seed: 88 });
+    const tutorial = current.contracts.offers[0];
+    if (tutorial === undefined) throw new Error("fixture");
+    const legacyState = {
+      ...current,
+      version: 2,
+      inventory: [
+        ...current.inventory.map(({ id, definitionId }) => ({
+          id,
+          definitionId,
+        })),
+        { id: "legacy-purchase", definitionId: "used-2u-compute" },
+      ],
+      facilities: current.facilities.map((facility) => ({
+        ...facility,
+        racks: facility.racks.map((rack) => ({
+          ...rack,
+          equipment: [
+            {
+              id: "legacy-installed",
+              definitionId: "consumer-router",
+              startUnit: 0,
+              poweredOn: false,
+            },
+          ],
+        })),
+      })),
+      contracts: {
+        ...current.contracts,
+        offers: [],
+        active: [
+          {
+            ...tutorial,
+            status: "active",
+            assignedTargetId: "rack-starter-1",
+            totalDurationSeconds: 180,
+            remainingSeconds: 90,
+            customerTolerance: 45,
+            violationSeconds: 9,
+          },
+        ],
+      },
+    };
+    const loaded = loadGame(JSON.stringify({ version: 2, state: legacyState }));
+    expect(loaded.ok).toBe(true);
+    if (!loaded.ok) return;
+    expect(loaded.state.version).toBe(3);
+    expect(loaded.state.inventory).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          id: "equipment-refurbished-1",
+          acquisitionPrice: 0,
+        }),
+        expect.objectContaining({
+          id: "legacy-purchase",
+          acquisitionPrice: 300,
+        }),
+      ]),
+    );
+    expect(loaded.state.facilities[0]?.racks[0]?.equipment[0]).toMatchObject({
+      id: "legacy-installed",
+      acquisitionPrice: 45,
+      startUnit: 0,
+      poweredOn: false,
+    });
+    expect(loaded.state.contracts.active[0]).toMatchObject({
+      totalDurationSeconds: 30,
+      remainingSeconds: 15,
+      customerTolerance: 5,
+      violationSeconds: 1,
+    });
+
+    const legacyActive = legacyState.contracts.active[0];
+    if (legacyActive === undefined) throw new Error("fixture");
+    const offered = loadGame(
+      JSON.stringify({
+        version: 2,
+        state: {
+          ...legacyState,
+          progression: {
+            ...legacyState.progression,
+            terminalState: { kind: "tutorial-failed", occurredAtSeconds: 0 },
+          },
+          contracts: {
+            ...legacyState.contracts,
+            active: [],
+            offers: [
+              {
+                ...legacyActive,
+                status: "offered",
+                assignedTargetId: undefined,
+                violationSeconds: 0,
+              },
+            ],
+          },
+        },
+      }),
+    );
+    if (!offered.ok) throw new Error(JSON.stringify(offered.error));
+    expect(offered).toMatchObject({
+      ok: true,
+      state: {
+        progression: { terminalState: { kind: "tutorial-failed" } },
+        contracts: {
+          offers: [
+            {
+              totalDurationSeconds: 30,
+              remainingSeconds: 30,
+              customerTolerance: 5,
+              violationSeconds: 0,
+            },
+          ],
+        },
+      },
+    });
   });
 
   it("returns typed errors for malformed JSON, bad envelopes, and unsupported versions", () => {

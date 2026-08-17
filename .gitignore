@@ -1,6 +1,9 @@
 node_modules/
 dist/
+dist-qa/
 coverage/
+playwright-report/
+test-results/
 *.local
 .env
 .env.*

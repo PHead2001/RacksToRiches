@@ -1727,7 +1727,8 @@ interface GameState {
 
 ## Save behavior
 
-- Autosave every ten seconds.
+- Autosave is enabled by default every five minutes.
+- Players may choose 1, 5, 10, 15, or 30 minute intervals.
 - Save when major transactions occur.
 - Save when the browser tab becomes hidden.
 - Save before unload when supported.
@@ -1917,22 +1918,134 @@ The simulation can run entirely through tests without the React UI.
 
 ## Phase 2: Playable vertical slice
 
-Build:
+Phase 2 delivers the first complete browser-playable loop while preserving the
+pure Phase 1 simulation boundary. The application uses explicit boot, main-menu,
+setup, save-manager, options, credits, and active-game screen states. The active
+game exposes only Facility, Contracts, Hardware Store, and the pause menu.
 
-- Dashboard
-- One bedroom facility
-- One starter rack
-- Rack equipment placement
-- Hardware store
-- Three contract offers
-- Contract acceptance
-- Contract assignment
-- Revenue ticking
-- Saving
+The main menu supports Continue, New Game, Load Game, Options, and Credits.
+Continue selects the most recently played valid save. Browser builds do not show
+a fake Quit action; application capabilities reserve that action for a future
+desktop adapter.
+
+Five reusable local save slots are supported. Each slot reports company, cash,
+reputation tier, playtime, last-played timestamp, schema version, development
+modification status, and health. Save health is empty, valid, recoverable, or
+invalid. Slot operations include create or overwrite, load, save, delete, JSON
+export, validated JSON import, and last-known-good backup restoration. Browser
+save writes use isolated temporary, current, backup, and preserved-corrupt
+records. Import validation occurs before any current data is replaced. Invalid
+or unsupported data is never silently reset or deleted.
+
+All bottom-right typed notifications expire automatically. Success and
+information notices last five seconds; warnings and errors last eight seconds
+and remain recorded in bounded diagnostics after their toast disappears.
+Repeated autosaves replace the prior save notification and reset its timer.
+
+Global options are stored separately from game slots. Phase 2 options are fixed
+UI scale, reduced motion, compact or expanded number formatting, autosave,
+fixed autosave intervals, and fullscreen when the platform supports it. Audio
+settings remain outside Phase 2 because audio does not exist yet.
+
+Interface scale changes preview immediately while Options is open. Leaving
+without saving restores the persisted scale. Autosave intervals are 1, 5, 10,
+15, and 30 minutes, with five minutes as the default. Legacy Phase 2 option
+records using 10 or 30 seconds migrate to one minute; the legacy 60-second
+choice remains one minute.
+
+The playable slice begins in the bedroom with the Phase 1 starter rack, four
+inventory items, zero cash, and Gravy's Garden Blog offer. Electricity expense
+is explicitly waived by the pure simulation until the tutorial completes or
+fails. The Facility screen provides a keyboard- and click-operable 12U grid,
+pointer and touch drag interactions, inventory installation, direct rack-face
+movement, removal controls, power toggles, live capacity telemetry, and explicit
+power or cooling throttling warnings. Rack-unit selection is an anchor: large
+items clamp naturally at rack edges, choose the nearest valid span, and
+deterministically reflow existing hardware when necessary. Click, keyboard, and
+drag interactions all commit through the same typed pure layout command.
+Installed rack faces are the only drag and keyboard-move handles. Inventory and
+Installed Controls scroll independently within bounded panels, including the
+full-rack and 30-item QA stress states.
+
+The tutorial offer can be accepted and assigned to the starter rack and remains
+recoverable until acceptance. The Contracts screen shows requirements,
+per-resource fulfillment, duration, revenue multiplier output, actual revenue,
+SLA state, total and remaining SLA buffer, and remaining time. Time below 100%
+fulfillment consumes the buffer, while healthy service recovers it at the
+centralized recovery rate. SLA buffer seconds use one duration-based rule:
+`clamp(round(total duration × 0.10), 5, 45)`. The 30-second tutorial therefore
+has a five-second buffer. Readiness labels distinguish missing hardware from
+an actual capacity shortfall. Completion grants the centralized tutorial
+reputation reward, records the tutorial milestone, unlocks the bedroom hardware
+store, and fills three deterministic Bedroom Host marketplace slots. Accepting,
+rejecting, or expiring a starter offer deterministically refills its slot from
+the saved RNG state. Negotiation, renewal, growth, rack groups, and enterprise
+contracts are not Phase 2 systems.
+
+The Contracts screen reports total, active-demand reservations, remaining
+consumable capacity, projected post-acceptance capacity, aggregate fulfillment,
+and exact shortages. Compute, GPU compute, storage, and bandwidth are consumed;
+reliability and security are capability checks. The pure accept command refuses
+offers whose projected aggregate fulfillment is below 100% using the shared
+readiness epsilon.
+
+The Hardware Store lists currently unlocked bedroom-compatible Phase 1
+equipment with price, rack size, output, power, heat, reliability, and category.
+Purchases update cash and inventory atomically through a pure typed command.
+Each instance records its acquisition price. Inventory equipment can be sold
+atomically for half that price, rounded to cents. Starter items record $0,
+remain sale-locked until the tutorial completes, and then have no resale value.
+Installed equipment must return to inventory before sale. Scrapping is not
+available in this phase.
+
+Runtime coordination belongs outside `src/game/**`. One runtime owner advances
+elapsed browser time, avoids duplicate Strict Mode tick loops, supports autosave
+and development speed multipliers, saves on document hiding and menu return,
+and reports saving, saved, or failed only after repository confirmation. Offline
+earnings remain a Phase 3 concern.
+
+Development and QA builds provide an F10 control deck. It is draggable,
+resizable, minimizable, keyboard reachable, bounded to the viewport, and offers
+typed economy, time, contract, scenario, diagnostic, and one-step undo commands.
+Every accepted command validates the resulting game state, appends to a bounded
+log, creates one undo snapshot, and marks subsequent saves as development
+modified. The normal release build removes the development panel module from
+its output rather than hiding it.
+
+Expected storage, import, migration, and command failures produce actionable
+messages. Unexpected React, runtime-loop, global error, and unhandled-rejection
+failures enter a recovery UI with diagnostic copy, valid-state export, reload,
+and return-to-menu controls. Bootstrap failures render a styled fatal fallback
+instead of a blank page. Error history is in-memory and bounded; no telemetry is
+sent anywhere.
+
+Tutorial SLA exhaustion persists a terminal tutorial-failed state, autosaves,
+and returns to the game-over screen after reload. Debt remains playable below
+$0. Cash-based failure occurs only at the centralized bankruptcy threshold of
+-$10,000. Crossing that threshold preserves the exact cash value, persists the
+terminal state, stops normal simulation, and offers return, export, and
+confirmed delete/start-over actions. Existing version-one saves migrate through
+version two to save version three. Version-two tutorials preserve active
+completion percentage and consumed SLA percentage while moving to the
+30-second duration and duration-derived buffer. Completed and terminal
+tutorials remain complete or terminal. Known starter instances infer a $0
+acquisition price; other version-two instances infer the equipment purchase
+cost because Phase 2 had no discounts. IDs, locations, power states, and cash
+are preserved.
+
+The placeholder interface is desktop-first and cyber-industrial, with semantic
+controls, visible keyboard focus, reduced-motion support, responsive save and
+options screens, and no horizontal clipping at the required desktop viewports.
+Final art is intentionally outside Phase 2.
 
 Completion requirement:
 
-A player can start a new game, build a rack, accept a contract, and earn money.
+A player can create a named company in one of five safe slots, build the starter
+rack without relying on drag and drop, accept and assign the tutorial contract,
+watch simulation-backed income change, unlock the starter store and marketplace,
+save, return to the menu, refresh, and restore the same progress. Release, QA,
+unit, architecture, dead-code, coverage, browser, accessibility, and rendered
+inspection gates must pass before Phase 2 is complete.
 
 ## Phase 3: Early progression
 
@@ -1987,7 +2100,7 @@ Build:
 
 The player begins with:
 
-- $500
+- $0
 - One bedroom facility
 - One empty 12U rack
 - One refurbished desktop server
@@ -2011,10 +2124,15 @@ Revenue:
 $2 per second
 
 Duration:
-180 seconds
+30 seconds
 ```
 
 The player installs the equipment, assigns the contract, and begins earning revenue.
+
+Electricity is waived until this tutorial completes or fails. Successful
+completion pays enough to purchase at least one meaningful starter item. A
+tutorial SLA breach is a persistent game-over condition. Debt above -$10,000 is
+allowed; reaching or crossing -$10,000 triggers bankruptcy.
 
 After completing the tutorial contract:
 
